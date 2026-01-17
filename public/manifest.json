@@ -1,0 +1,43 @@
+{
+  "name": "Restaurant Management System",
+  "short_name": "RMS",
+  "description": "Restaurant Management System - Billing, Orders, Kitchen & More",
+  "theme_color": "#ec2b25",
+  "background_color": "#ffffff",
+  "display": "standalone",
+  "orientation": "any",
+  "scope": "/",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["business", "food", "productivity"],
+  "shortcuts": [
+    {
+      "name": "Billing",
+      "url": "/billing",
+      "description": "Go to billing page"
+    },
+    {
+      "name": "Kitchen",
+      "url": "/kitchen",
+      "description": "Go to kitchen orders"
+    },
+    {
+      "name": "Tables",
+      "url": "/tables",
+      "description": "Manage tables"
+    }
+  ]
+}

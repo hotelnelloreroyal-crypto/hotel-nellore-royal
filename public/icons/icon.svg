@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="64" fill="#ec2b25"/>
+  <g fill="white">
+    <!-- Restaurant Icon - Plate with utensils -->
+    <circle cx="256" cy="256" r="120" fill="none" stroke="white" stroke-width="20"/>
+    <circle cx="256" cy="256" r="80" fill="none" stroke="white" stroke-width="12"/>
+    <!-- Fork -->
+    <rect x="120" y="150" width="16" height="120" rx="8"/>
+    <rect x="100" y="140" width="8" height="40" rx="4"/>
+    <rect x="112" y="140" width="8" height="40" rx="4"/>
+    <rect x="124" y="140" width="8" height="40" rx="4"/>
+    <rect x="136" y="140" width="8" height="40" rx="4"/>
+    <!-- Knife -->
+    <path d="M380 140 L396 140 L396 200 Q396 220 388 220 Q380 220 380 200 Z"/>
+    <rect x="380" y="220" width="16" height="80" rx="8"/>
+    <!-- Text RMS -->
+    <text x="256" y="275" font-family="Arial, sans-serif" font-size="64" font-weight="bold" text-anchor="middle" fill="white">RMS</text>
+  </g>
+</svg>

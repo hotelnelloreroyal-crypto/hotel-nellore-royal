@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NOVA Restaurant Management System</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#ec2b25" />
+    <meta name="description" content="Restaurant Management System - Billing, Orders, Kitchen & More" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="RMS" />
+    
+    <!-- Manifest -->
+    <link rel="manifest" href="/manifest.json" />
+    
+    <!-- Apple Touch Icons -->
+    <link rel="apple-touch-icon" href="/icons/icon.svg" />
+    
+    <!-- QZ Tray for thermal printing -->
+    <script src="https://cdn.jsdelivr.net/npm/js-sha256@0.9.0/src/sha256.min.js"></script>
+    <script>
+      // Create Sha256 alias that QZ Tray expects
+      if (typeof sha256 !== 'undefined') {
+        window.Sha256 = { hash: function(data) { return sha256(data); } };
+      }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/rsvp@4.8.5/dist/rsvp.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.1.0/qz-tray.min.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

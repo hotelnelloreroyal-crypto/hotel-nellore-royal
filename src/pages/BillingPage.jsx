@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, ChevronDown, Search, Minus, X, Printer, Save, ChevronLeft, ChevronRight, CreditCard, Loader2, ClipboardList } from 'lucide-react';
+import { Plus, ChevronDown, Search, Minus, X, Printer, Save, ChevronLeft, ChevronRight, CreditCard, Loader2, ClipboardList, Bluetooth } from 'lucide-react';
 import { collection, addDoc, getDocs, query, orderBy, limit, startAfter, getCountFromServer, where, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import toast from 'react-hot-toast';
 import ThermalBill from '../components/Billing/ThermalBill';
-import { printThermalBill, printKOT, preConnectQZ } from '../utils/qzPrint';
+import { printThermalBill, printKOT, preConnectQZ, connectBluetoothPrinter, isBluetoothConnected, isMobile, isWebBluetoothAvailable } from '../utils/qzPrint';
 import { ENABLE_AGGREGATORS } from '../config/features';
 
 const ITEMS_PER_PAGE = 24;
@@ -76,6 +76,9 @@ const BillingPage = () => {
   const [savedSplitPayment, setSavedSplitPayment] = useState(null);
   const [savedAmountReceived, setSavedAmountReceived] = useState(0);
   const [savedChange, setSavedChange] = useState(0);
+  // Bluetooth Printer State (for mobile)
+  const [bluetoothConnected, setBluetoothConnected] = useState(false);
+  const [connectingBluetooth, setConnectingBluetooth] = useState(false);
 
   const printRef = useRef();
   const itemsListRef = useRef();
@@ -91,12 +94,14 @@ const BillingPage = () => {
     fetchTotalBillsCount();
     fetchBillStats();
     
-    // Pre-connect QZ Tray for fast printing
-    preConnectQZ().then(connected => {
-      if (connected) {
-        console.log('QZ Tray ready for fast printing');
-      }
-    });
+    // Pre-connect QZ Tray for fast printing (desktop only)
+    if (!isMobile()) {
+      preConnectQZ().then(connected => {
+        if (connected) {
+          console.log('QZ Tray ready for fast printing');
+        }
+      });
+    }
   }, []);
 
   // Fetch bill statistics for today
@@ -868,27 +873,38 @@ const BillingPage = () => {
       return;
     }
 
-    // If there are unsaved changes, save first
-    if (hasUnsavedChanges()) {
-      const saved = await handleSaveBill();
-      if (!saved) return;
-      // Wait a moment for bill to be saved, then print KOT
-      setTimeout(async () => {
-        await printKOTData();
-      }, 500);
-    } else {
-      // No changes, just print KOT directly
-      await printKOTData();
+    // Get items with pending changes (newly added or quantity increased)
+    const pendingItems = billItems
+      .filter(item => (item.pendingKotQty || 0) > 0)
+      .map(item => ({
+        ...item,
+        quantity: item.pendingKotQty // Only the new quantity for KOT
+      }));
+
+    if (pendingItems.length === 0) {
+      toast.error('No new items to send to kitchen');
+      return;
     }
+
+    // Save first
+    const saved = await handleSaveBill();
+    if (!saved) return;
+
+    // Wait a moment for bill to be saved, then print KOT with only new items
+    setTimeout(async () => {
+      await printKOTData(pendingItems);
+    }, 500);
   };
 
   // Helper function to print KOT
-  const printKOTData = async () => {
+  const printKOTData = async (itemsToPrint = null) => {
+    const items = itemsToPrint || billItems;
+    
     const kotData = {
       table: selectedTable ? selectedTable.shortCode : 'T/A',
       type: billType === 'dine-in' ? 'Dine In' : billType === 'take-away' ? 'Take Away' : billType === 'swiggy' ? 'Swiggy' : 'Zomato',
-      items: billItems,
-      totalQty: billItems.reduce((sum, item) => sum + item.quantity, 0),
+      items: items,
+      totalQty: items.reduce((sum, item) => sum + item.quantity, 0),
       date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
       time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
     };
@@ -897,9 +913,34 @@ const BillingPage = () => {
       console.log('Attempting KOT print to Bluetooth printer...');
       await printKOT(kotData);
       toast.success('KOT sent to kitchen!', { duration: 1500 });
+      // Update Bluetooth connection status after successful print
+      if (isMobile() && isWebBluetoothAvailable()) {
+        setBluetoothConnected(isBluetoothConnected());
+      }
     } catch (err) {
       console.error('KOT print error:', err.message);
       toast.error(`KOT Error: ${err.message}`, { duration: 3000 });
+    }
+  };
+
+  // Connect Bluetooth Printer (for mobile)
+  const handleConnectBluetooth = async () => {
+    if (!isWebBluetoothAvailable()) {
+      toast.error('Bluetooth not supported. Use Chrome on Android.');
+      return;
+    }
+    
+    setConnectingBluetooth(true);
+    try {
+      await connectBluetoothPrinter();
+      setBluetoothConnected(true);
+      toast.success('Bluetooth printer connected!');
+    } catch (err) {
+      console.error('Bluetooth connection error:', err);
+      toast.error(`Connection failed: ${err.message}`);
+      setBluetoothConnected(false);
+    } finally {
+      setConnectingBluetooth(false);
     }
   };
 
@@ -1576,6 +1617,33 @@ const BillingPage = () => {
                 </div>
               </div>
 
+              {/* Bluetooth Connect Button (Mobile Only) */}
+              {isMobile() && isWebBluetoothAvailable() && (
+                <button
+                  onClick={handleConnectBluetooth}
+                  disabled={connectingBluetooth}
+                  className={`w-full mb-2 flex items-center justify-center space-x-2 px-3 py-2 rounded transition-colors cursor-pointer ${
+                    bluetoothConnected 
+                      ? 'bg-green-100 text-green-700 border border-green-500' 
+                      : 'bg-blue-100 text-blue-700 border border-blue-500 hover:bg-blue-200'
+                  }`}
+                >
+                  {connectingBluetooth ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span className="text-xs">Connecting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Bluetooth className="w-4 h-4" />
+                      <span className="text-xs">
+                        {bluetoothConnected ? '✓ Bluetooth Connected' : 'Connect Bluetooth Printer'}
+                      </span>
+                    </>
+                  )}
+                </button>
+              )}
+              
               {/* Action Buttons */}
               <div className="grid grid-cols-2 gap-2 mb-2">
                 <button

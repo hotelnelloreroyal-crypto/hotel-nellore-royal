@@ -1,11 +1,38 @@
 // QZ Tray printing utility for thermal printers
 // Make sure QZ Tray is installed and running on the system
+// For mobile: Uses Web Bluetooth API (Chrome Android only)
 
 let qz = null;
 let printerConfig = null; // Cache printer config for fast printing (wired thermal for bills)
 let kotPrinterConfig = null; // Cache KOT printer config (Bluetooth for kitchen)
 let isConnected = false;
 let securitySet = false;
+
+// Web Bluetooth for mobile KOT printing
+let bluetoothDevice = null;
+let bluetoothCharacteristic = null;
+
+// ============================================
+// PRINTER CONFIGURATION - SET YOUR PRINTER NAMES HERE
+// ============================================
+// To find your printer names, run this in browser console after QZ connects:
+// qz.printers.find().then(p => console.log('Available Printers:', p));
+// Then set the exact printer names below:
+
+const BILL_PRINTER_NAME = null;  // e.g., 'EPSON TM-T82' or 'GP-80250IIN' - set null for auto-detect
+const KOT_PRINTER_NAME = "BlueTooth Printer";   // e.g., 'BlueTooth Printer' or 'Portable Printer' - set null for auto-detect
+
+// ============================================
+
+// Check if running on mobile
+export const isMobile = () => {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+};
+
+// Check if Web Bluetooth is available
+export const isWebBluetoothAvailable = () => {
+  return navigator.bluetooth !== undefined;
+};
 
 // Initialize QZ (script is loaded in index.html)
 export const initQZ = () => {
@@ -79,7 +106,7 @@ export const connectQZ = async () => {
   }
 };
 
-// Get and cache printer config for fast printing
+// Get and cache printer config for BILL printing (wired thermal)
 export const getPrinter = async (printerName = null) => {
   // Return cached config if available
   if (printerConfig && !printerName) {
@@ -88,30 +115,40 @@ export const getPrinter = async (printerName = null) => {
   
   await connectQZ();
   
-  if (printerName) {
-    printerConfig = qz.configs.create(printerName);
+  // Use provided name, configured name, or auto-detect
+  const targetPrinter = printerName || BILL_PRINTER_NAME;
+  
+  if (targetPrinter) {
+    console.log('Using configured BILL printer:', targetPrinter);
+    printerConfig = qz.configs.create(targetPrinter);
     return printerConfig;
   }
   
-  // Try to find a thermal printer
+  // Auto-detect: Try to find a wired thermal printer
   const printers = await qz.printers.find();
   console.log('Available printers:', printers);
   
-  // Look for common thermal printer names
-  const thermalKeywords = ['thermal', 'pos', 'receipt', 'epson', 'star', 'bixolon', '80mm', '58mm', 'gp-', 'xp-'];
-  const thermalPrinter = printers.find(p => 
-    thermalKeywords.some(keyword => p.toLowerCase().includes(keyword))
-  );
+  // Look for common WIRED thermal printer names (exclude Bluetooth)
+  const bluetoothKeywords = ['bluetooth', 'bt-', 'wireless', 'mobile', 'portable'];
+  const thermalKeywords = ['thermal', 'pos', 'receipt', 'epson', 'star', 'bixolon', '80mm', '58mm', 'gp-', 'xp-', 'tm-'];
   
-  // Use thermal printer if found, otherwise use default
-  const selectedPrinter = thermalPrinter || (await qz.printers.getDefault());
-  console.log('Selected printer:', selectedPrinter);
+  // Find thermal printers that are NOT Bluetooth
+  const wiredThermalPrinter = printers.find(p => {
+    const lower = p.toLowerCase();
+    const isBluetooth = bluetoothKeywords.some(kw => lower.includes(kw));
+    const isThermal = thermalKeywords.some(kw => lower.includes(kw));
+    return isThermal && !isBluetooth;
+  });
+  
+  // Use wired thermal if found, otherwise use default
+  const selectedPrinter = wiredThermalPrinter || (await qz.printers.getDefault());
+  console.log('Selected BILL printer (wired):', selectedPrinter);
   
   printerConfig = qz.configs.create(selectedPrinter);
   return printerConfig;
 };
 
-// Get Bluetooth/KOT printer for kitchen orders
+// Get and cache printer config for KOT printing (Bluetooth)
 export const getKOTPrinter = async (printerName = null) => {
   // Return cached config if available
   if (kotPrinterConfig && !printerName) {
@@ -120,32 +157,68 @@ export const getKOTPrinter = async (printerName = null) => {
   
   await connectQZ();
   
-  if (printerName) {
-    kotPrinterConfig = qz.configs.create(printerName);
+  // Use provided name, configured name, or auto-detect
+  const targetPrinter = printerName || KOT_PRINTER_NAME;
+  
+  if (targetPrinter) {
+    console.log('Using configured KOT printer:', targetPrinter);
+    kotPrinterConfig = qz.configs.create(targetPrinter);
     return kotPrinterConfig;
   }
   
-  // Try to find a Bluetooth printer for KOT
+  // Auto-detect: Try to find a Bluetooth printer for KOT
   const printers = await qz.printers.find();
   console.log('Available printers for KOT:', printers);
   
   // Look for Bluetooth printer keywords
-  const bluetoothKeywords = ['bluetooth', 'bt-', 'wireless', 'mobile', 'portable', 'kot', 'kitchen'];
+  const bluetoothKeywords = ['bluetooth', 'bt-', 'wireless', 'mobile', 'portable', 'bt ', 'bt_'];
   const bluetoothPrinter = printers.find(p => 
     bluetoothKeywords.some(keyword => p.toLowerCase().includes(keyword))
   );
   
-  // If no Bluetooth found, use regular thermal or default
-  const thermalKeywords = ['thermal', 'pos', 'receipt', 'epson', 'star', 'bixolon', '80mm', '58mm', 'gp-', 'xp-'];
-  const thermalPrinter = printers.find(p => 
-    thermalKeywords.some(keyword => p.toLowerCase().includes(keyword))
-  );
+  if (bluetoothPrinter) {
+    console.log('Selected KOT printer (Bluetooth):', bluetoothPrinter);
+    kotPrinterConfig = qz.configs.create(bluetoothPrinter);
+    return kotPrinterConfig;
+  }
   
-  const selectedPrinter = bluetoothPrinter || thermalPrinter || (await qz.printers.getDefault());
-  console.log('Selected KOT printer:', selectedPrinter);
+  // No Bluetooth found - show warning and list available printers
+  console.warn('⚠️ No Bluetooth printer detected for KOT!');
+  console.warn('Available printers:', printers);
+  console.warn('Please set KOT_PRINTER_NAME in qzPrint.js with your Bluetooth printer name');
   
-  kotPrinterConfig = qz.configs.create(selectedPrinter);
+  // Fallback to default (not ideal)
+  const defaultPrinter = await qz.printers.getDefault();
+  console.log('Falling back to default printer for KOT:', defaultPrinter);
+  kotPrinterConfig = qz.configs.create(defaultPrinter);
   return kotPrinterConfig;
+};
+
+// List all available printers - call this to find your printer names
+export const listAllPrinters = async () => {
+  try {
+    await connectQZ();
+    const printers = await qz.printers.find();
+    const defaultPrinter = await qz.printers.getDefault();
+    
+    console.log('='.repeat(50));
+    console.log('📋 AVAILABLE PRINTERS:');
+    console.log('='.repeat(50));
+    printers.forEach((p, i) => {
+      const isDefault = p === defaultPrinter ? ' ⭐ (DEFAULT)' : '';
+      console.log(`${i + 1}. ${p}${isDefault}`);
+    });
+    console.log('='.repeat(50));
+    console.log('💡 To configure printers, edit qzPrint.js and set:');
+    console.log('   BILL_PRINTER_NAME = "Your Wired Printer Name"');
+    console.log('   KOT_PRINTER_NAME = "Your Bluetooth Printer Name"');
+    console.log('='.repeat(50));
+    
+    return printers;
+  } catch (err) {
+    console.error('Failed to list printers:', err);
+    throw err;
+  }
 };
 
 // Pre-connect and cache printer on app load
@@ -535,11 +608,157 @@ export const generateKOTCommands = (kotData) => {
   return cmd;
 };
 
-// Print KOT to Bluetooth/Kitchen printer
+// ============================================
+// WEB BLUETOOTH PRINTING (For Mobile)
+// ============================================
+
+// Common Bluetooth printer service and characteristic UUIDs
+const PRINTER_SERVICE_UUID = '000018f0-0000-1000-8000-00805f9b34fb';
+const PRINTER_CHAR_UUID = '00002af1-0000-1000-8000-00805f9b34fb';
+
+// Alternative UUIDs for different printers
+const ALT_PRINTER_SERVICES = [
+  '000018f0-0000-1000-8000-00805f9b34fb',
+  '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+  'e7810a71-73ae-499d-8c15-faa9aef0c3f2'
+];
+
+// Connect to Bluetooth printer (for mobile)
+export const connectBluetoothPrinter = async () => {
+  if (!isWebBluetoothAvailable()) {
+    throw new Error('Web Bluetooth is not available. Use Chrome on Android.');
+  }
+
+  try {
+    console.log('Requesting Bluetooth device...');
+    
+    // Request any device (let user select)
+    bluetoothDevice = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: ALT_PRINTER_SERVICES
+    });
+
+    console.log('Connecting to GATT server...');
+    const server = await bluetoothDevice.gatt.connect();
+
+    // Try to find printer service
+    let service = null;
+    for (const serviceUuid of ALT_PRINTER_SERVICES) {
+      try {
+        service = await server.getPrimaryService(serviceUuid);
+        console.log('Found service:', serviceUuid);
+        break;
+      } catch (e) {
+        console.log('Service not found:', serviceUuid);
+      }
+    }
+
+    if (!service) {
+      // Try to get all services
+      const services = await server.getPrimaryServices();
+      console.log('Available services:', services.map(s => s.uuid));
+      if (services.length > 0) {
+        service = services[0];
+      } else {
+        throw new Error('No compatible printer service found');
+      }
+    }
+
+    // Get characteristic for writing
+    const characteristics = await service.getCharacteristics();
+    console.log('Available characteristics:', characteristics.map(c => c.uuid));
+    
+    // Find writable characteristic
+    bluetoothCharacteristic = characteristics.find(c => 
+      c.properties.write || c.properties.writeWithoutResponse
+    );
+
+    if (!bluetoothCharacteristic) {
+      throw new Error('No writable characteristic found');
+    }
+
+    console.log('Bluetooth printer connected!', bluetoothDevice.name);
+    return { success: true, deviceName: bluetoothDevice.name };
+  } catch (err) {
+    console.error('Bluetooth connection error:', err);
+    bluetoothDevice = null;
+    bluetoothCharacteristic = null;
+    throw err;
+  }
+};
+
+// Check if Bluetooth printer is connected
+export const isBluetoothConnected = () => {
+  return bluetoothDevice?.gatt?.connected && bluetoothCharacteristic !== null;
+};
+
+// Print via Web Bluetooth
+export const printViaBluetooth = async (commands) => {
+  if (!isBluetoothConnected()) {
+    // Try to connect
+    await connectBluetoothPrinter();
+  }
+
+  if (!bluetoothCharacteristic) {
+    throw new Error('Bluetooth printer not connected');
+  }
+
+  // Convert string to bytes
+  const encoder = new TextEncoder();
+  const data = encoder.encode(commands);
+  
+  // Send in chunks (Bluetooth has packet size limits)
+  const CHUNK_SIZE = 100;
+  for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+    const chunk = data.slice(i, i + CHUNK_SIZE);
+    try {
+      if (bluetoothCharacteristic.properties.writeWithoutResponse) {
+        await bluetoothCharacteristic.writeValueWithoutResponse(chunk);
+      } else {
+        await bluetoothCharacteristic.writeValue(chunk);
+      }
+    } catch (err) {
+      console.error('Bluetooth write error at chunk', i, err);
+      throw err;
+    }
+    // Small delay between chunks
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  console.log('Print data sent via Bluetooth');
+  return { success: true };
+};
+
+// Disconnect Bluetooth printer
+export const disconnectBluetoothPrinter = () => {
+  if (bluetoothDevice?.gatt?.connected) {
+    bluetoothDevice.gatt.disconnect();
+  }
+  bluetoothDevice = null;
+  bluetoothCharacteristic = null;
+};
+
+// ============================================
+
+// Print KOT - Auto-selects QZ Tray (desktop) or Web Bluetooth (mobile)
 export const printKOT = async (kotData, printerName = null) => {
+  const commands = generateKOTCommands(kotData);
+  
+  // On mobile, use Web Bluetooth
+  if (isMobile() && isWebBluetoothAvailable()) {
+    console.log('Mobile detected - using Web Bluetooth for KOT');
+    try {
+      await printViaBluetooth(commands);
+      return { success: true, method: 'bluetooth' };
+    } catch (err) {
+      console.error('Web Bluetooth print error:', err);
+      throw new Error('Bluetooth print failed: ' + err.message);
+    }
+  }
+  
+  // On desktop, use QZ Tray
   try {
     const config = kotPrinterConfig || await getKOTPrinter(printerName);
-    const commands = generateKOTCommands(kotData);
     
     const data = [{ 
       type: 'raw', 
@@ -548,7 +767,7 @@ export const printKOT = async (kotData, printerName = null) => {
     }];
     
     await qz.print(config, data);
-    return { success: true };
+    return { success: true, method: 'qz-tray' };
   } catch (err) {
     console.error('KOT Print error:', err);
     isConnected = false;
@@ -564,10 +783,18 @@ export default {
   getKOTPrinter,
   preConnectQZ,
   isQZReady,
+  listAllPrinters,
   printThermalBill,
   printKOT,
   printMenuItems,
   disconnectQZ,
   generateThermalCommands,
-  generateKOTCommands
+  generateKOTCommands,
+  // Web Bluetooth exports
+  isMobile,
+  isWebBluetoothAvailable,
+  connectBluetoothPrinter,
+  isBluetoothConnected,
+  printViaBluetooth,
+  disconnectBluetoothPrinter
 };

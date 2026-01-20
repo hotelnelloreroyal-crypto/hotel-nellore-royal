@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, ChevronDown, Search, Minus, X, Printer, Save, ChevronLeft, ChevronRight, CreditCard, Loader2 } from 'lucide-react';
+import { Plus, ChevronDown, Search, Minus, X, Printer, Save, ChevronLeft, ChevronRight, CreditCard, Loader2, ClipboardList } from 'lucide-react';
 import { collection, addDoc, getDocs, query, orderBy, limit, startAfter, getCountFromServer, where, updateDoc, doc } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import toast from 'react-hot-toast';
 import ThermalBill from '../components/Billing/ThermalBill';
-import { printThermalBill, preConnectQZ } from '../utils/qzPrint';
+import { printThermalBill, printKOT, preConnectQZ } from '../utils/qzPrint';
 import { ENABLE_AGGREGATORS } from '../config/features';
 
 const ITEMS_PER_PAGE = 24;
@@ -65,6 +65,10 @@ const BillingPage = () => {
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [amountReceived, setAmountReceived] = useState('');
   const [processing, setProcessing] = useState(false);
+  // Split Payment States
+  const [isSplitPayment, setIsSplitPayment] = useState(false);
+  const [cashAmount, setCashAmount] = useState('');
+  const [upiAmount, setUpiAmount] = useState('');
 
   const printRef = useRef();
   const itemsListRef = useRef();
@@ -803,6 +807,59 @@ const BillingPage = () => {
     }
   };
 
+  // Save and Print Bill (wired thermal printer)
+  const handleSaveAndPrint = async () => {
+    await handleSaveBill();
+    // Wait a moment for bill to be saved, then print
+    setTimeout(async () => {
+      await handlePrintBill();
+    }, 500);
+  };
+
+  // Save and Print KOT (Bluetooth printer for kitchen)
+  const handleSaveAndKOT = async () => {
+    await handleSaveBill();
+    
+    // Wait a moment for bill to be saved
+    setTimeout(async () => {
+      if (billItems.length === 0) {
+        toast.error('No items to print KOT');
+        return;
+      }
+      
+      // Get items that need KOT (pending items)
+      const pendingItems = billItems.filter(item => item.kotSent);
+      
+      if (pendingItems.length === 0) {
+        toast.error('No new items for KOT');
+        return;
+      }
+      
+      // Prepare KOT data
+      const kotData = {
+        kotNo: displayBillId ? displayBillId.replace('#B-', '#K-') : 'NEW',
+        orderNo: displayBillId ? displayBillId.replace('#B-', '#O-') : 'NEW',
+        billNo: displayBillId || 'NEW',
+        date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+        time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        type: billType === 'dine-in' ? 'Dine In' : billType === 'take-away' ? 'Take Away' : billType === 'swiggy' ? 'Swiggy' : 'Zomato',
+        table: selectedTable ? selectedTable.shortCode : 'T/A',
+        items: pendingItems,
+        totalQty: pendingItems.reduce((sum, item) => sum + item.quantity, 0)
+      };
+
+      // Try printing KOT to Bluetooth printer
+      try {
+        console.log('Attempting KOT print to Bluetooth printer...');
+        await printKOT(kotData);
+        toast.success('KOT sent to kitchen!', { duration: 1500 });
+      } catch (err) {
+        console.error('KOT print error:', err.message);
+        toast.error(`KOT Error: ${err.message}`, { duration: 3000 });
+      }
+    }, 500);
+  };
+
   // Handle payment
   const handlePayment = () => {
     if (!currentBillId) {
@@ -813,30 +870,64 @@ const BillingPage = () => {
       toast.error('No items in the bill');
       return;
     }
-    setAmountReceived(calculateTotal().toString());
+    const total = calculateTotal();
+    setAmountReceived(total.toString());
+    setCashAmount('');
+    setUpiAmount('');
+    setIsSplitPayment(false);
+    setPaymentMethod('cash');
     setShowPaymentModal(true);
   };
 
   // Complete payment
   const completePayment = async () => {
     const total = calculateTotal();
-    const received = parseFloat(amountReceived) || 0;
-
-    if (received < total) {
-      toast.error('Amount received is less than total');
-      return;
-    }
-
-    setProcessing(true);
-    try {
-      await updateDoc(doc(db, 'bills', currentBillId), {
+    
+    let paymentData = {};
+    
+    if (isSplitPayment) {
+      const cash = parseFloat(cashAmount) || 0;
+      const upi = parseFloat(upiAmount) || 0;
+      const totalReceived = cash + upi;
+      
+      if (totalReceived < total) {
+        toast.error('Total amount received is less than bill total');
+        return;
+      }
+      
+      paymentData = {
+        status: 'paid',
+        paymentMethod: 'split',
+        splitPayment: {
+          cash: cash,
+          upi: upi
+        },
+        amountReceived: totalReceived,
+        change: totalReceived - total,
+        paidAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+    } else {
+      const received = parseFloat(amountReceived) || 0;
+      
+      if (received < total) {
+        toast.error('Amount received is less than total');
+        return;
+      }
+      
+      paymentData = {
         status: 'paid',
         paymentMethod,
         amountReceived: received,
         change: received - total,
         paidAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
-      });
+      };
+    }
+
+    setProcessing(true);
+    try {
+      await updateDoc(doc(db, 'bills', currentBillId), paymentData);
 
       // Cancel associated order if exists
       if (currentOrderId) {
@@ -1096,10 +1187,10 @@ const BillingPage = () => {
       {/* Add Bill Section */}
       {showAddBill && (
         <div ref={addBillSectionRef} className="bg-white border border-gray-200 p-3 md:p-6">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">
             {/* Column 1: Tables Selection or Customer Name */}
             {billType === 'dine-in' && (
-              <div className="lg:border-r border-gray-200 lg:pr-6">
+              <div className="lg:col-span-3 lg:border-r border-gray-200 lg:pr-4">
                 <h3 className="text-base md:text-lg font-bold text-gray-900 mb-3 md:mb-4">Select Table</h3>
                 
                 {/* Customer Name */}
@@ -1139,7 +1230,7 @@ const BillingPage = () => {
                 </div>
 
                 {/* Tables Grid */}
-                <div className="grid grid-cols-3 gap-2 max-h-96 overflow-y-auto">
+                <div className="grid grid-cols-5 gap-2 max-h-96 overflow-y-auto">
                   {filteredTables.map(table => {
                     const openBillsCount = bills.filter(bill => bill.tableId === table.id && bill.status === 'open').length;
                     return (
@@ -1185,7 +1276,7 @@ const BillingPage = () => {
               </div>
             )}
             {(billType === 'take-away' || billType === 'swiggy' || billType === 'zomato') && (
-              <div className="lg:pr-6">
+              <div className="lg:col-span-3 lg:border-r border-gray-200 lg:pr-4">
                 <h3 className="text-base md:text-lg font-bold text-gray-900 mb-3 md:mb-4">Customer Details</h3>
                 {/* Customer Name for Take Away/Swiggy/Zomato */}
                 <div className="mb-3 md:mb-4">
@@ -1201,72 +1292,12 @@ const BillingPage = () => {
             )}
 
             {/* Column 2: Items Selection */}
-            <div className="lg:border-r border-gray-200 lg:pr-6">
+            <div className="lg:col-span-6 lg:border-r border-gray-200 lg:pr-4">
               <h3 className="text-base md:text-lg font-bold text-gray-900 mb-3 md:mb-4">Select Items</h3>
               
-              {/* Category Dropdown and Item Search */}
-              <div className="flex flex-col sm:flex-row gap-2 mb-3 md:mb-4">
-                {/* Category Dropdown */}
-                <div className="relative flex-1 sm:flex-initial sm:w-1/2">
-                  <button
-                    onClick={() => setShowCategoryDropdown(!showCategoryDropdown)}
-                    className="w-full px-2 md:px-3 py-2 border border-gray-200 flex items-center justify-between hover:border-gray-300 cursor-pointer"
-                  >
-                    <span className="text-xs md:text-sm truncate">
-                      {selectedCategoryData 
-                        ? `${selectedCategoryData.emoji} ${selectedCategoryData.name}` 
-                        : 'All Categories'}
-                    </span>
-                    <ChevronDown className="w-4 h-4 text-gray-500" />
-                  </button>
-                  
-                  {showCategoryDropdown && (
-                    <div className="absolute w-full mt-1 bg-white border border-gray-200 z-10 max-h-64">
-                      <div className="p-2 border-b border-gray-200">
-                        <div className="relative">
-                          <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-                          <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="Search..."
-                            className="w-full pl-8 pr-2 py-1 border border-gray-200 focus:outline-none focus:border-[#ec2b25] text-sm"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </div>
-                      </div>
-                      <div className="overflow-y-auto max-h-48">
-                        <button
-                          onClick={() => {
-                            setSelectedCategory('');
-                            setShowCategoryDropdown(false);
-                            setSearchQuery('');
-                          }}
-                          className="w-full px-3 py-2 text-left hover:bg-gray-100 text-sm cursor-pointer"
-                        >
-                          All Categories
-                        </button>
-                        {searchFilteredCategories.map(category => (
-                          <button
-                            key={category.id}
-                            onClick={() => {
-                              setSelectedCategory(category.id);
-                              setShowCategoryDropdown(false);
-                              setSearchQuery('');
-                            }}
-                            className="w-full px-3 py-2 text-left hover:bg-gray-100 flex items-center space-x-2 cursor-pointer"
-                          >
-                            <span>{category.emoji}</span>
-                            <span className="text-sm">{category.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                
-                {/* Item Search */}
-                <div className="relative flex-1 sm:flex-initial sm:w-1/2">
+              {/* Item Search */}
+              <div className="mb-3 md:mb-4">
+                <div className="relative">
                   <Search className="absolute left-2 md:left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
                     type="text"
@@ -1286,8 +1317,34 @@ const BillingPage = () => {
                 </div>
               </div>
 
-              {/* Items List */}
-              <div ref={itemsListRef} className="grid grid-cols-1 sm:grid-cols-1 gap-2 max-h-80 md:max-h-[32rem] overflow-y-auto">
+              {/* Categories Sidebar + Items Grid */}
+              <div className="flex gap-3">
+                {/* Categories Sidebar */}
+                <div className="w-28 md:w-32 flex-shrink-0 max-h-80 md:max-h-[32rem] overflow-y-auto border-r border-gray-200 pr-2">
+                  <button
+                    onClick={() => setSelectedCategory('')}
+                    className={`w-full px-2 py-2 text-left text-xs md:text-sm mb-1 transition-colors cursor-pointer ${
+                      selectedCategory === '' ? 'bg-[#ec2b25] text-white' : 'hover:bg-gray-100 text-gray-700'
+                    }`}
+                  >
+                    All
+                  </button>
+                  {categories.map(category => (
+                    <button
+                      key={category.id}
+                      onClick={() => setSelectedCategory(category.id)}
+                      className={`w-full px-2 py-2 text-left text-xs md:text-sm mb-1 transition-colors cursor-pointer flex items-center gap-1 ${
+                        selectedCategory === category.id ? 'bg-[#ec2b25] text-white' : 'hover:bg-gray-100 text-gray-700'
+                      }`}
+                    >
+                      <span>{category.emoji}</span>
+                      <span className="truncate">{category.name}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Items List */}
+                <div ref={itemsListRef} className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-80 md:max-h-[32rem] overflow-y-auto">
                 {filteredItems.map(item => {
                   const itemCategory = categories.find(cat => cat.id === item.categoryId);
                   return (
@@ -1328,11 +1385,12 @@ const BillingPage = () => {
                     </button>
                   );
                 })}
+                </div>
               </div>
             </div>
 
             {/* Column 3: Bill Summary */}
-            <div>
+            <div className="lg:col-span-3">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-gray-900">Bill Summary</h3>
                 {billType === 'dine-in' && selectedTable && (
@@ -1454,7 +1512,7 @@ const BillingPage = () => {
               </div>
 
               {/* Action Buttons */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2">
+              <div className="grid grid-cols-2 gap-2 mb-2">
                 <button
                   onClick={handleSaveBill}
                   disabled={saving}
@@ -1473,12 +1531,20 @@ const BillingPage = () => {
                   )}
                 </button>
                 <button
-                  onClick={handlePrintBill}
-                  disabled={!currentBillId}
-                  className="flex flex-col items-center justify-center px-2 py-2 md:py-3 border border-gray-900 text-gray-900 hover:bg-gray-900 hover:text-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={handleSaveAndPrint}
+                  disabled={saving}
+                  className="flex flex-col items-center justify-center px-2 py-2 md:py-3 border border-[#ec2b25] text-[#ec2b25] hover:bg-[#ec2b25] hover:text-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Printer className="w-4 md:w-5 h-4 md:h-5 mb-1" />
-                  <span className="text-xs">Print</span>
+                  <span className="text-xs">Save & Print</span>
+                </button>
+                <button
+                  onClick={handleSaveAndKOT}
+                  disabled={saving}
+                  className="flex flex-col items-center justify-center px-2 py-2 md:py-3 border border-orange-500 text-orange-500 hover:bg-orange-500 hover:text-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ClipboardList className="w-4 md:w-5 h-4 md:h-5 mb-1" />
+                  <span className="text-xs">Save & KOT</span>
                 </button>
                 <button
                   onClick={handlePayment}
@@ -1805,7 +1871,7 @@ const BillingPage = () => {
       {/* Payment Modal */}
       {showPaymentModal && (
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
-          <div className="bg-white w-full max-w-md">
+          <div className="bg-white w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="p-4 md:p-6">
               <h2 className="text-lg md:text-xl font-bold text-gray-900 mb-4 md:mb-6">Complete Payment</h2>
               
@@ -1814,7 +1880,7 @@ const BillingPage = () => {
                 <div className="bg-gray-50 border border-gray-200 p-3 md:p-4">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs md:text-sm text-gray-600">Table:</span>
-                    <span className="font-medium text-sm md:text-base">{selectedTable?.name}</span>
+                    <span className="font-medium text-sm md:text-base">{selectedTable?.name || 'N/A'}</span>
                   </div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs md:text-sm text-gray-600">Customer:</span>
@@ -1832,69 +1898,181 @@ const BillingPage = () => {
                   </div>
                 </div>
 
-                {/* Payment Method */}
+                {/* Payment Type Toggle */}
                 <div>
                   <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
-                    Payment Method
+                    Payment Type
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <button
-                      onClick={() => setPaymentMethod('cash')}
-                      className={`px-2 md:px-4 py-2 text-xs md:text-sm border cursor-pointer ${
-                        paymentMethod === 'cash'
+                      onClick={() => {
+                        setIsSplitPayment(false);
+                        setAmountReceived(calculateTotal().toString());
+                      }}
+                      className={`px-3 py-2 text-sm font-medium border cursor-pointer ${
+                        !isSplitPayment
                           ? 'border-[#ec2b25] bg-[#ec2b25] text-white'
                           : 'border-gray-200 hover:bg-gray-100'
                       }`}
                     >
-                      Cash
+                      Full Payment
                     </button>
                     <button
-                      onClick={() => setPaymentMethod('card')}
-                      className={`px-2 md:px-4 py-2 text-xs md:text-sm border cursor-pointer ${
-                        paymentMethod === 'card'
+                      onClick={() => {
+                        setIsSplitPayment(true);
+                        setCashAmount('');
+                        setUpiAmount('');
+                      }}
+                      className={`px-3 py-2 text-sm font-medium border cursor-pointer ${
+                        isSplitPayment
                           ? 'border-[#ec2b25] bg-[#ec2b25] text-white'
                           : 'border-gray-200 hover:bg-gray-100'
                       }`}
                     >
-                      Card
-                    </button>
-                    <button
-                      onClick={() => setPaymentMethod('upi')}
-                      className={`px-2 md:px-4 py-2 text-xs md:text-sm border cursor-pointer ${
-                        paymentMethod === 'upi'
-                          ? 'border-[#ec2b25] bg-[#ec2b25] text-white'
-                          : 'border-gray-200 hover:bg-gray-100'
-                      }`}
-                    >
-                      UPI
+                      Split Bill
                     </button>
                   </div>
                 </div>
 
-                {/* Amount Received */}
-                <div>
-                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
-                    Amount Received
-                  </label>
-                  <input
-                    type="number"
-                    value={amountReceived}
-                    onChange={(e) => setAmountReceived(e.target.value)}
-                    placeholder="Enter amount"
-                    className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-200 focus:outline-none focus:border-[#ec2b25]"
-                  />
-                </div>
-
-                {/* Change */}
-                {amountReceived && parseFloat(amountReceived) >= calculateTotal() && (
-                  <div className="bg-green-50 border border-green-200 p-2 md:p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs md:text-sm text-green-700">Change to return:</span>
-                      <span className="font-bold text-sm md:text-base text-green-700">
-                        ₹{(parseFloat(amountReceived) - calculateTotal()).toFixed(2)}
-                      </span>
+                {/* Full Payment Options */}
+                {!isSplitPayment && (
+                  <>
+                    {/* Payment Method */}
+                    <div>
+                      <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
+                        Payment Method
+                      </label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          onClick={() => setPaymentMethod('cash')}
+                          className={`px-2 md:px-4 py-2 text-xs md:text-sm border cursor-pointer ${
+                            paymentMethod === 'cash'
+                              ? 'border-[#ec2b25] bg-[#ec2b25] text-white'
+                              : 'border-gray-200 hover:bg-gray-100'
+                          }`}
+                        >
+                          Cash
+                        </button>
+                        <button
+                          onClick={() => setPaymentMethod('card')}
+                          className={`px-2 md:px-4 py-2 text-xs md:text-sm border cursor-pointer ${
+                            paymentMethod === 'card'
+                              ? 'border-[#ec2b25] bg-[#ec2b25] text-white'
+                              : 'border-gray-200 hover:bg-gray-100'
+                          }`}
+                        >
+                          Card
+                        </button>
+                        <button
+                          onClick={() => setPaymentMethod('upi')}
+                          className={`px-2 md:px-4 py-2 text-xs md:text-sm border cursor-pointer ${
+                            paymentMethod === 'upi'
+                              ? 'border-[#ec2b25] bg-[#ec2b25] text-white'
+                              : 'border-gray-200 hover:bg-gray-100'
+                          }`}
+                        >
+                          UPI
+                        </button>
+                      </div>
                     </div>
-                  </div>
+
+                    {/* Amount Received */}
+                    <div>
+                      <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
+                        Amount Received
+                      </label>
+                      <input
+                        type="number"
+                        value={amountReceived}
+                        onChange={(e) => setAmountReceived(e.target.value)}
+                        placeholder="Enter amount"
+                        className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-200 focus:outline-none focus:border-[#ec2b25]"
+                      />
+                    </div>
+
+                    {/* Change */}
+                    {amountReceived && parseFloat(amountReceived) >= calculateTotal() && (
+                      <div className="bg-green-50 border border-green-200 p-2 md:p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs md:text-sm text-green-700">Change to return:</span>
+                          <span className="font-bold text-sm md:text-base text-green-700">
+                            ₹{(parseFloat(amountReceived) - calculateTotal()).toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Split Payment Options */}
+                {isSplitPayment && (
+                  <>
+                    {/* Cash Amount */}
+                    <div>
+                      <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
+                        Cash Amount
+                      </label>
+                      <input
+                        type="number"
+                        value={cashAmount}
+                        onChange={(e) => setCashAmount(e.target.value)}
+                        placeholder="Enter cash amount"
+                        className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-200 focus:outline-none focus:border-[#ec2b25]"
+                      />
+                    </div>
+
+                    {/* UPI Amount */}
+                    <div>
+                      <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
+                        UPI Amount
+                      </label>
+                      <input
+                        type="number"
+                        value={upiAmount}
+                        onChange={(e) => setUpiAmount(e.target.value)}
+                        placeholder="Enter UPI amount"
+                        className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-200 focus:outline-none focus:border-[#ec2b25]"
+                      />
+                    </div>
+
+                    {/* Split Summary */}
+                    <div className="bg-blue-50 border border-blue-200 p-3">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-blue-700">Cash:</span>
+                          <span className="font-medium text-blue-700">₹{parseFloat(cashAmount) || 0}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-blue-700">UPI:</span>
+                          <span className="font-medium text-blue-700">₹{parseFloat(upiAmount) || 0}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-sm border-t border-blue-200 pt-2">
+                          <span className="font-bold text-blue-800">Total Received:</span>
+                          <span className="font-bold text-blue-800">₹{(parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0)}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-blue-700">Bill Total:</span>
+                          <span className="font-medium text-blue-700">₹{calculateTotal()}</span>
+                        </div>
+                        {((parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0)) >= calculateTotal() && (
+                          <div className="flex items-center justify-between text-sm bg-green-100 p-2 mt-2">
+                            <span className="text-green-700">Change to return:</span>
+                            <span className="font-bold text-green-700">
+                              ₹{((parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0) - calculateTotal()).toFixed(2)}
+                            </span>
+                          </div>
+                        )}
+                        {((parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0)) < calculateTotal() && (
+                          <div className="flex items-center justify-between text-sm bg-red-100 p-2 mt-2">
+                            <span className="text-red-700">Remaining:</span>
+                            <span className="font-bold text-red-700">
+                              ₹{(calculateTotal() - (parseFloat(cashAmount) || 0) - (parseFloat(upiAmount) || 0)).toFixed(2)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
                 )}
               </div>
 
@@ -1909,7 +2087,13 @@ const BillingPage = () => {
                 </button>
                 <button
                   onClick={completePayment}
-                  disabled={processing || !amountReceived || parseFloat(amountReceived) < calculateTotal()}
+                  disabled={
+                    processing || 
+                    (isSplitPayment 
+                      ? ((parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0)) < calculateTotal()
+                      : (!amountReceived || parseFloat(amountReceived) < calculateTotal())
+                    )
+                  }
                   className="flex-1 px-3 md:px-4 py-2 text-sm md:text-base bg-green-600 text-white hover:bg-green-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                 >
                   {processing ? (

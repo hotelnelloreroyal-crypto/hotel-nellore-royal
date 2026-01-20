@@ -2,7 +2,8 @@
 // Make sure QZ Tray is installed and running on the system
 
 let qz = null;
-let printerConfig = null; // Cache printer config for fast printing
+let printerConfig = null; // Cache printer config for fast printing (wired thermal for bills)
+let kotPrinterConfig = null; // Cache KOT printer config (Bluetooth for kitchen)
 let isConnected = false;
 let securitySet = false;
 
@@ -110,12 +111,50 @@ export const getPrinter = async (printerName = null) => {
   return printerConfig;
 };
 
+// Get Bluetooth/KOT printer for kitchen orders
+export const getKOTPrinter = async (printerName = null) => {
+  // Return cached config if available
+  if (kotPrinterConfig && !printerName) {
+    return kotPrinterConfig;
+  }
+  
+  await connectQZ();
+  
+  if (printerName) {
+    kotPrinterConfig = qz.configs.create(printerName);
+    return kotPrinterConfig;
+  }
+  
+  // Try to find a Bluetooth printer for KOT
+  const printers = await qz.printers.find();
+  console.log('Available printers for KOT:', printers);
+  
+  // Look for Bluetooth printer keywords
+  const bluetoothKeywords = ['bluetooth', 'bt-', 'wireless', 'mobile', 'portable', 'kot', 'kitchen'];
+  const bluetoothPrinter = printers.find(p => 
+    bluetoothKeywords.some(keyword => p.toLowerCase().includes(keyword))
+  );
+  
+  // If no Bluetooth found, use regular thermal or default
+  const thermalKeywords = ['thermal', 'pos', 'receipt', 'epson', 'star', 'bixolon', '80mm', '58mm', 'gp-', 'xp-'];
+  const thermalPrinter = printers.find(p => 
+    thermalKeywords.some(keyword => p.toLowerCase().includes(keyword))
+  );
+  
+  const selectedPrinter = bluetoothPrinter || thermalPrinter || (await qz.printers.getDefault());
+  console.log('Selected KOT printer:', selectedPrinter);
+  
+  kotPrinterConfig = qz.configs.create(selectedPrinter);
+  return kotPrinterConfig;
+};
+
 // Pre-connect and cache printer on app load
 export const preConnectQZ = async () => {
   try {
     await connectQZ();
     await getPrinter();
-    console.log('QZ Tray pre-connected and printer cached');
+    await getKOTPrinter();
+    console.log('QZ Tray pre-connected and printers cached');
     return true;
   } catch (err) {
     console.warn('QZ Tray pre-connect failed:', err.message);
@@ -395,16 +434,122 @@ export const disconnectQZ = () => {
   }
   isConnected = false;
   printerConfig = null;
+  kotPrinterConfig = null;
+};
+
+// Generate ESC/POS commands for KOT (Kitchen Order Ticket)
+export const generateKOTCommands = (kotData) => {
+  const {
+    kotNo = 'N/A',
+    orderNo = 'N/A',
+    billNo = 'N/A',
+    date = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+    time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+    type = 'Dine In',
+    table = 'N/A',
+    items = [],
+    totalQty = 0
+  } = kotData;
+
+  // ESC/POS commands
+  const ESC = '\x1B';
+  const GS = '\x1D';
+  const INIT = ESC + '@';
+  const ALIGN_CENTER = ESC + 'a\x01';
+  const ALIGN_LEFT = ESC + 'a\x00';
+  const BOLD_ON = ESC + 'E\x01';
+  const BOLD_OFF = ESC + 'E\x00';
+  const DOUBLE_HEIGHT = GS + '!\x10';
+  const DOUBLE_WIDTH = GS + '!\x20';
+  const DOUBLE_SIZE = GS + '!\x11';
+  const NORMAL_SIZE = GS + '!\x00';
+  const PARTIAL_CUT = GS + 'V\x01';
+  const LF = '\n';
+  
+  const W = 48; // Paper width chars (80mm)
+  const pad = (s, l) => s.substring(0, l).padEnd(l);
+  const padL = (s, l) => s.substring(0, l).padStart(l);
+  const line = (c = '-') => c.repeat(W);
+  
+  let cmd = INIT;
+  
+  // Header - KOT Title (large, bold)
+  cmd += ALIGN_CENTER + BOLD_ON + DOUBLE_SIZE;
+  cmd += '*** KOT ***' + LF;
+  cmd += NORMAL_SIZE + BOLD_OFF + LF;
+  
+  // Date/Time and Type
+  cmd += ALIGN_LEFT;
+  cmd += `${date} ${time}`.padEnd(W - type.length) + type + LF;
+  
+  // KOT Info
+  cmd += line('=') + LF;
+  cmd += ALIGN_CENTER + BOLD_ON + DOUBLE_HEIGHT;
+  cmd += `TABLE: ${table}` + LF;
+  cmd += NORMAL_SIZE;
+  cmd += `ORDER: ${orderNo}` + LF;
+  cmd += BOLD_OFF + line('=') + LF;
+  
+  // Items Header
+  cmd += ALIGN_LEFT + BOLD_ON;
+  cmd += pad('ITEM', 36) + padL('QTY', 10) + LF;
+  cmd += BOLD_OFF + line('-') + LF;
+  
+  // Items - larger for kitchen visibility
+  cmd += DOUBLE_HEIGHT;
+  items.forEach((item, i) => {
+    const name = `${i + 1}. ${item.name}`.substring(0, 36);
+    cmd += pad(name, 36) + padL(`x${item.quantity}`, 10) + LF;
+  });
+  cmd += NORMAL_SIZE;
+  
+  cmd += line('-') + LF;
+  
+  // Total Items
+  cmd += BOLD_ON + ALIGN_CENTER;
+  cmd += `TOTAL ITEMS: ${totalQty}` + LF;
+  cmd += BOLD_OFF + LF;
+  
+  cmd += line('=') + LF + LF + LF;
+  
+  cmd += PARTIAL_CUT;
+  
+  return cmd;
+};
+
+// Print KOT to Bluetooth/Kitchen printer
+export const printKOT = async (kotData, printerName = null) => {
+  try {
+    const config = kotPrinterConfig || await getKOTPrinter(printerName);
+    const commands = generateKOTCommands(kotData);
+    
+    const data = [{ 
+      type: 'raw', 
+      format: 'plain',
+      data: commands
+    }];
+    
+    await qz.print(config, data);
+    return { success: true };
+  } catch (err) {
+    console.error('KOT Print error:', err);
+    isConnected = false;
+    kotPrinterConfig = null;
+    throw err;
+  }
 };
 
 export default {
   initQZ,
   connectQZ,
   getPrinter,
+  getKOTPrinter,
   preConnectQZ,
   isQZReady,
   printThermalBill,
+  printKOT,
   printMenuItems,
   disconnectQZ,
-  generateThermalCommands
+  generateThermalCommands,
+  generateKOTCommands
 };

@@ -40,10 +40,10 @@ const Sidebar = ({ isOpen, onClose }) => {
 
   return (
     <>
-      {/* Mobile Overlay */}
+      {/* Overlay */}
       {isOpen && (
         <div 
-          className="fixed inset-0 bg-[rgba(0,0,0,0.5)] bg-opacity-50 z-40 lg:hidden"
+          className="fixed inset-0 bg-[rgba(0,0,0,0.5)] bg-opacity-50 z-40"
           onClick={onClose}
         />
       )}
@@ -52,8 +52,8 @@ const Sidebar = ({ isOpen, onClose }) => {
       <div className={`
         fixed top-0 left-0 h-full bg-white z-50 border-r border-gray-200 flex flex-col
         transition-transform duration-300 ease-in-out
-        w-64 sm:w-72 lg:w-64
-        ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+        w-64 sm:w-72
+        ${isOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         {/* Logo */}
         <div className="p-4 sm:p-6 border-b border-gray-200 flex items-center justify-between">
@@ -61,10 +61,10 @@ const Sidebar = ({ isOpen, onClose }) => {
             <h1 className="text-xl sm:text-2xl font-bold text-[#ec2b25]">{RESTAURANT_NAME}</h1>
             <p className="text-xs sm:text-sm text-gray-500 mt-1">Management System</p>
           </div>
-          {/* Close button for mobile */}
+          {/* Close button */}
           <button
             onClick={onClose}
-            className="lg:hidden p-2 hover:bg-gray-100 transition-colors cursor-pointer"
+            className="p-2 hover:bg-gray-100 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5 text-gray-700" />
           </button>
@@ -80,10 +80,8 @@ const Sidebar = ({ isOpen, onClose }) => {
                 to={item.path}
                 end={item.path === '/'}
                 onClick={() => {
-                  // Close sidebar on mobile when clicking a link
-                  if (window.innerWidth < 1024) {
-                    onClose();
-                  }
+                  // Close sidebar when clicking a link
+                  onClose();
                 }}
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-3 sm:px-4 py-2.5 sm:py-3 transition-colors cursor-pointer ${

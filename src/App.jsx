@@ -27,7 +27,7 @@ const AppLayout = ({ children }) => {
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       
       {/* Main Content */}
-      <div className="flex-1 flex flex-col lg:ml-64 w-full">
+      <div className="flex-1 flex flex-col w-full">
         {/* Header */}
         <Header onMenuClick={() => setSidebarOpen(true)} />
         

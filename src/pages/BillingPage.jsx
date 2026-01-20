@@ -511,18 +511,18 @@ const BillingPage = () => {
   const handleSaveBill = async () => {
     if ((billType === 'dine-in') && !selectedTable) {
       toast.error('Please select a table');
-      return;
+      return false;
     }
     
     // Check for Swiggy/Zomato order ID requirement
     if ((billType === 'swiggy' || billType === 'zomato') && !platformOrderId.trim()) {
       setShowPlatformModal(true);
-      return;
+      return false;
     }
     
     if (billItems.length === 0) {
       toast.error('Please add items to the bill');
-      return;
+      return false;
     }
 
     setSaving(true);
@@ -539,7 +539,7 @@ const BillingPage = () => {
       if (itemsWithChanges.length === 0 && !discountChanged) {
         toast.error('No changes to save');
         setSaving(false);
-        return;
+        return false;
       }
 
       // Separate items to add vs items to reduce
@@ -765,9 +765,11 @@ const BillingPage = () => {
       fetchBillStats();
       
       toast.success(`Changes saved successfully!`);
+      return true;
     } catch (error) {
       console.error('Error saving bill:', error);
       toast.error('Failed to save bill');
+      return false;
     } finally {
       setSaving(false);
     }
@@ -818,57 +820,87 @@ const BillingPage = () => {
     }
   };
 
+  // Check if bill has unsaved changes
+  const hasUnsavedChanges = () => {
+    const itemsWithChanges = billItems.filter(item => {
+      const pendingQty = item.pendingKotQty || 0;
+      return pendingQty !== 0;
+    });
+    const discountChanged = discount !== savedDiscount;
+    return itemsWithChanges.length > 0 || discountChanged;
+  };
+
   // Save and Print Bill (wired thermal printer)
   const handleSaveAndPrint = async () => {
-    await handleSaveBill();
-    // Wait a moment for bill to be saved, then print
-    setTimeout(async () => {
+    // Validate first
+    if ((billType === 'dine-in') && !selectedTable) {
+      toast.error('Please select a table');
+      return;
+    }
+    if (billItems.length === 0) {
+      toast.error('Please add items to the bill');
+      return;
+    }
+
+    // If there are unsaved changes, save first
+    if (hasUnsavedChanges()) {
+      const saved = await handleSaveBill();
+      if (!saved) return;
+      // Wait a moment for bill to be saved, then print
+      setTimeout(async () => {
+        await handlePrintBill();
+      }, 500);
+    } else {
+      // No changes, just print directly
       await handlePrintBill();
-    }, 500);
+    }
   };
 
   // Save and Print KOT (Bluetooth printer for kitchen)
   const handleSaveAndKOT = async () => {
-    await handleSaveBill();
-    
-    // Wait a moment for bill to be saved
-    setTimeout(async () => {
-      if (billItems.length === 0) {
-        toast.error('No items to print KOT');
-        return;
-      }
-      
-      // Get items that need KOT (pending items)
-      const pendingItems = billItems.filter(item => item.kotSent);
-      
-      if (pendingItems.length === 0) {
-        toast.error('No new items for KOT');
-        return;
-      }
-      
-      // Prepare KOT data
-      const kotData = {
-        kotNo: displayBillId ? displayBillId.replace('#B-', '#K-') : 'NEW',
-        orderNo: displayBillId ? displayBillId.replace('#B-', '#O-') : 'NEW',
-        billNo: displayBillId || 'NEW',
-        date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-        time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
-        type: billType === 'dine-in' ? 'Dine In' : billType === 'take-away' ? 'Take Away' : billType === 'swiggy' ? 'Swiggy' : 'Zomato',
-        table: selectedTable ? selectedTable.shortCode : 'T/A',
-        items: pendingItems,
-        totalQty: pendingItems.reduce((sum, item) => sum + item.quantity, 0)
-      };
+    // Validate first
+    if ((billType === 'dine-in') && !selectedTable) {
+      toast.error('Please select a table');
+      return;
+    }
+    if (billItems.length === 0) {
+      toast.error('No items to print KOT');
+      return;
+    }
 
-      // Try printing KOT to Bluetooth printer
-      try {
-        console.log('Attempting KOT print to Bluetooth printer...');
-        await printKOT(kotData);
-        toast.success('KOT sent to kitchen!', { duration: 1500 });
-      } catch (err) {
-        console.error('KOT print error:', err.message);
-        toast.error(`KOT Error: ${err.message}`, { duration: 3000 });
-      }
-    }, 500);
+    // If there are unsaved changes, save first
+    if (hasUnsavedChanges()) {
+      const saved = await handleSaveBill();
+      if (!saved) return;
+      // Wait a moment for bill to be saved, then print KOT
+      setTimeout(async () => {
+        await printKOTData();
+      }, 500);
+    } else {
+      // No changes, just print KOT directly
+      await printKOTData();
+    }
+  };
+
+  // Helper function to print KOT
+  const printKOTData = async () => {
+    const kotData = {
+      table: selectedTable ? selectedTable.shortCode : 'T/A',
+      type: billType === 'dine-in' ? 'Dine In' : billType === 'take-away' ? 'Take Away' : billType === 'swiggy' ? 'Swiggy' : 'Zomato',
+      items: billItems,
+      totalQty: billItems.reduce((sum, item) => sum + item.quantity, 0),
+      date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+      time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+    };
+
+    try {
+      console.log('Attempting KOT print to Bluetooth printer...');
+      await printKOT(kotData);
+      toast.success('KOT sent to kitchen!', { duration: 1500 });
+    } catch (err) {
+      console.error('KOT print error:', err.message);
+      toast.error(`KOT Error: ${err.message}`, { duration: 3000 });
+    }
   };
 
   // Handle payment

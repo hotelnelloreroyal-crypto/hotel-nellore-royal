@@ -466,9 +466,6 @@ export const disconnectQZ = () => {
 // Generate ESC/POS commands for KOT (Kitchen Order Ticket)
 export const generateKOTCommands = (kotData) => {
   const {
-    kotNo = 'N/A',
-    orderNo = 'N/A',
-    billNo = 'N/A',
     date = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
     time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
     type = 'Dine In',
@@ -486,7 +483,6 @@ export const generateKOTCommands = (kotData) => {
   const BOLD_ON = ESC + 'E\x01';
   const BOLD_OFF = ESC + 'E\x00';
   const DOUBLE_HEIGHT = GS + '!\x10';
-  const DOUBLE_WIDTH = GS + '!\x20';
   const DOUBLE_SIZE = GS + '!\x11';
   const NORMAL_SIZE = GS + '!\x00';
   const PARTIAL_CUT = GS + 'V\x01';
@@ -502,19 +498,15 @@ export const generateKOTCommands = (kotData) => {
   // Header - KOT Title (large, bold)
   cmd += ALIGN_CENTER + BOLD_ON + DOUBLE_SIZE;
   cmd += '*** KOT ***' + LF;
-  cmd += NORMAL_SIZE + BOLD_OFF + LF;
+  cmd += NORMAL_SIZE + BOLD_OFF;
   
-  // Date/Time and Type
-  cmd += ALIGN_LEFT;
-  cmd += `${date} ${time}`.padEnd(W - type.length) + type + LF;
-  
-  // KOT Info
+  // Table Name (large, prominent)
   cmd += line('=') + LF;
-  cmd += ALIGN_CENTER + BOLD_ON + DOUBLE_HEIGHT;
+  cmd += BOLD_ON + DOUBLE_SIZE;
   cmd += `TABLE: ${table}` + LF;
-  cmd += NORMAL_SIZE;
-  cmd += `ORDER: ${orderNo}` + LF;
-  cmd += BOLD_OFF + line('=') + LF;
+  cmd += NORMAL_SIZE + BOLD_OFF;
+  cmd += `${type} | ${date} ${time}` + LF;
+  cmd += line('=') + LF;
   
   // Items Header
   cmd += ALIGN_LEFT + BOLD_ON;

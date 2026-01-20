@@ -182,7 +182,11 @@ export const generateThermalCommands = (billData) => {
     subtotal = 0,
     discountAmount = 0,
     totalAmount = 0,
-    totalQty = 0
+    totalQty = 0,
+    paymentMethod = null,
+    splitPayment = null,
+    amountReceived = 0,
+    change = 0
   } = billData;
 
   // Restaurant details from env
@@ -285,6 +289,28 @@ export const generateThermalCommands = (billData) => {
   cmd += BOLD_ON + DOUBLE_HEIGHT + ALIGN_RIGHT;
   cmd += `TOTAL: Rs.${totalAmount}` + LF;
   cmd += NORMAL_SIZE + BOLD_OFF + LF;
+  
+  // Payment Details
+  if (paymentMethod) {
+    cmd += ALIGN_LEFT + line('-') + LF;
+    if (paymentMethod === 'split' && splitPayment) {
+      cmd += BOLD_ON + 'PAYMENT (SPLIT):' + LF + BOLD_OFF;
+      if (splitPayment.cash > 0) {
+        cmd += `Cash:`.padEnd(W - `Rs.${splitPayment.cash}`.length) + `Rs.${splitPayment.cash}` + LF;
+      }
+      if (splitPayment.card > 0) {
+        cmd += `Card:`.padEnd(W - `Rs.${splitPayment.card}`.length) + `Rs.${splitPayment.card}` + LF;
+      }
+      if (splitPayment.upi > 0) {
+        cmd += `UPI:`.padEnd(W - `Rs.${splitPayment.upi}`.length) + `Rs.${splitPayment.upi}` + LF;
+      }
+    } else {
+      cmd += `PAYMENT (${paymentMethod.toUpperCase()}):`.padEnd(W - `Rs.${amountReceived}`.length) + `Rs.${amountReceived}` + LF;
+    }
+    if (change > 0) {
+      cmd += BOLD_ON + `Change:`.padEnd(W - `Rs.${change}`.length) + `Rs.${change}` + LF + BOLD_OFF;
+    }
+  }
   
   // Footer
   cmd += ALIGN_CENTER + line('=') + LF;

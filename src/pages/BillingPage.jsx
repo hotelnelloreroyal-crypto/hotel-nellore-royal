@@ -67,8 +67,15 @@ const BillingPage = () => {
   const [processing, setProcessing] = useState(false);
   // Split Payment States
   const [isSplitPayment, setIsSplitPayment] = useState(false);
+  const [splitMethods, setSplitMethods] = useState(['cash', 'upi']); // Selected split methods
   const [cashAmount, setCashAmount] = useState('');
+  const [cardAmount, setCardAmount] = useState('');
   const [upiAmount, setUpiAmount] = useState('');
+  // Saved Payment Details (for printing)
+  const [savedPaymentMethod, setSavedPaymentMethod] = useState(null);
+  const [savedSplitPayment, setSavedSplitPayment] = useState(null);
+  const [savedAmountReceived, setSavedAmountReceived] = useState(0);
+  const [savedChange, setSavedChange] = useState(0);
 
   const printRef = useRef();
   const itemsListRef = useRef();
@@ -791,7 +798,11 @@ const BillingPage = () => {
       subtotal: subtotal,
       discountAmount: savedDiscount,
       totalAmount: total,
-      totalQty: billItems.reduce((sum, item) => sum + item.quantity, 0)
+      totalQty: billItems.reduce((sum, item) => sum + item.quantity, 0),
+      paymentMethod: savedPaymentMethod,
+      splitPayment: savedSplitPayment,
+      amountReceived: savedAmountReceived,
+      change: savedChange
     };
 
     // Try QZ Tray first for direct printing, fallback to browser print
@@ -873,8 +884,10 @@ const BillingPage = () => {
     const total = calculateTotal();
     setAmountReceived(total.toString());
     setCashAmount('');
+    setCardAmount('');
     setUpiAmount('');
     setIsSplitPayment(false);
+    setSplitMethods(['cash', 'upi']);
     setPaymentMethod('cash');
     setShowPaymentModal(true);
   };
@@ -887,8 +900,9 @@ const BillingPage = () => {
     
     if (isSplitPayment) {
       const cash = parseFloat(cashAmount) || 0;
+      const card = parseFloat(cardAmount) || 0;
       const upi = parseFloat(upiAmount) || 0;
-      const totalReceived = cash + upi;
+      const totalReceived = cash + card + upi;
       
       if (totalReceived < total) {
         toast.error('Total amount received is less than bill total');
@@ -900,7 +914,9 @@ const BillingPage = () => {
         paymentMethod: 'split',
         splitPayment: {
           cash: cash,
-          upi: upi
+          card: card,
+          upi: upi,
+          methods: splitMethods
         },
         amountReceived: totalReceived,
         change: totalReceived - total,
@@ -936,6 +952,12 @@ const BillingPage = () => {
           updatedAt: new Date().toISOString()
         });
       }
+
+      // Save payment details for printing
+      setSavedPaymentMethod(paymentData.paymentMethod);
+      setSavedSplitPayment(paymentData.splitPayment || null);
+      setSavedAmountReceived(paymentData.amountReceived);
+      setSavedChange(paymentData.change);
 
       toast.success('Payment completed successfully!');
       setShowPaymentModal(false);
@@ -1012,6 +1034,17 @@ const BillingPage = () => {
     setDiscount(0);
     setSavedDiscount(0);
     setPlatformOrderId('');
+    // Reset saved payment details
+    setSavedPaymentMethod(null);
+    setSavedSplitPayment(null);
+    setSavedAmountReceived(0);
+    setSavedChange(0);
+    // Reset split payment states
+    setIsSplitPayment(false);
+    setSplitMethods(['cash', 'upi']);
+    setCashAmount('');
+    setCardAmount('');
+    setUpiAmount('');
   };
 
   // Load bill for editing
@@ -2007,7 +2040,74 @@ const BillingPage = () => {
                 {/* Split Payment Options */}
                 {isSplitPayment && (
                   <>
+                    {/* Select Split Methods */}
+                    <div>
+                      <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
+                        Select Payment Methods (choose 2)
+                      </label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          onClick={() => {
+                            if (splitMethods.includes('cash')) {
+                              if (splitMethods.length > 1) {
+                                setSplitMethods(splitMethods.filter(m => m !== 'cash'));
+                                setCashAmount('');
+                              }
+                            } else if (splitMethods.length < 2) {
+                              setSplitMethods([...splitMethods, 'cash']);
+                            }
+                          }}
+                          className={`px-2 md:px-4 py-2 text-xs md:text-sm border cursor-pointer ${
+                            splitMethods.includes('cash')
+                              ? 'border-[#ec2b25] bg-[#ec2b25] text-white'
+                              : 'border-gray-200 hover:bg-gray-100'
+                          }`}
+                        >
+                          Cash
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (splitMethods.includes('card')) {
+                              if (splitMethods.length > 1) {
+                                setSplitMethods(splitMethods.filter(m => m !== 'card'));
+                                setCardAmount('');
+                              }
+                            } else if (splitMethods.length < 2) {
+                              setSplitMethods([...splitMethods, 'card']);
+                            }
+                          }}
+                          className={`px-2 md:px-4 py-2 text-xs md:text-sm border cursor-pointer ${
+                            splitMethods.includes('card')
+                              ? 'border-[#ec2b25] bg-[#ec2b25] text-white'
+                              : 'border-gray-200 hover:bg-gray-100'
+                          }`}
+                        >
+                          Card
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (splitMethods.includes('upi')) {
+                              if (splitMethods.length > 1) {
+                                setSplitMethods(splitMethods.filter(m => m !== 'upi'));
+                                setUpiAmount('');
+                              }
+                            } else if (splitMethods.length < 2) {
+                              setSplitMethods([...splitMethods, 'upi']);
+                            }
+                          }}
+                          className={`px-2 md:px-4 py-2 text-xs md:text-sm border cursor-pointer ${
+                            splitMethods.includes('upi')
+                              ? 'border-[#ec2b25] bg-[#ec2b25] text-white'
+                              : 'border-gray-200 hover:bg-gray-100'
+                          }`}
+                        >
+                          UPI
+                        </button>
+                      </div>
+                    </div>
+
                     {/* Cash Amount */}
+                    {splitMethods.includes('cash') && (
                     <div>
                       <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
                         Cash Amount
@@ -2020,8 +2120,26 @@ const BillingPage = () => {
                         className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-200 focus:outline-none focus:border-[#ec2b25]"
                       />
                     </div>
+                    )}
+
+                    {/* Card Amount */}
+                    {splitMethods.includes('card') && (
+                    <div>
+                      <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
+                        Card Amount
+                      </label>
+                      <input
+                        type="number"
+                        value={cardAmount}
+                        onChange={(e) => setCardAmount(e.target.value)}
+                        placeholder="Enter card amount"
+                        className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-200 focus:outline-none focus:border-[#ec2b25]"
+                      />
+                    </div>
+                    )}
 
                     {/* UPI Amount */}
+                    {splitMethods.includes('upi') && (
                     <div>
                       <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
                         UPI Amount
@@ -2034,39 +2152,50 @@ const BillingPage = () => {
                         className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-200 focus:outline-none focus:border-[#ec2b25]"
                       />
                     </div>
+                    )}
 
                     {/* Split Summary */}
                     <div className="bg-blue-50 border border-blue-200 p-3">
                       <div className="space-y-2">
+                        {splitMethods.includes('cash') && (
                         <div className="flex items-center justify-between text-sm">
                           <span className="text-blue-700">Cash:</span>
                           <span className="font-medium text-blue-700">₹{parseFloat(cashAmount) || 0}</span>
                         </div>
+                        )}
+                        {splitMethods.includes('card') && (
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-blue-700">Card:</span>
+                          <span className="font-medium text-blue-700">₹{parseFloat(cardAmount) || 0}</span>
+                        </div>
+                        )}
+                        {splitMethods.includes('upi') && (
                         <div className="flex items-center justify-between text-sm">
                           <span className="text-blue-700">UPI:</span>
                           <span className="font-medium text-blue-700">₹{parseFloat(upiAmount) || 0}</span>
                         </div>
+                        )}
                         <div className="flex items-center justify-between text-sm border-t border-blue-200 pt-2">
                           <span className="font-bold text-blue-800">Total Received:</span>
-                          <span className="font-bold text-blue-800">₹{(parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0)}</span>
+                          <span className="font-bold text-blue-800">₹{(parseFloat(cashAmount) || 0) + (parseFloat(cardAmount) || 0) + (parseFloat(upiAmount) || 0)}</span>
                         </div>
                         <div className="flex items-center justify-between text-sm">
                           <span className="text-blue-700">Bill Total:</span>
                           <span className="font-medium text-blue-700">₹{calculateTotal()}</span>
                         </div>
-                        {((parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0)) >= calculateTotal() && (
+                        {((parseFloat(cashAmount) || 0) + (parseFloat(cardAmount) || 0) + (parseFloat(upiAmount) || 0)) >= calculateTotal() && (
                           <div className="flex items-center justify-between text-sm bg-green-100 p-2 mt-2">
                             <span className="text-green-700">Change to return:</span>
                             <span className="font-bold text-green-700">
-                              ₹{((parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0) - calculateTotal()).toFixed(2)}
+                              ₹{((parseFloat(cashAmount) || 0) + (parseFloat(cardAmount) || 0) + (parseFloat(upiAmount) || 0) - calculateTotal()).toFixed(2)}
                             </span>
                           </div>
                         )}
-                        {((parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0)) < calculateTotal() && (
+                        {((parseFloat(cashAmount) || 0) + (parseFloat(cardAmount) || 0) + (parseFloat(upiAmount) || 0)) < calculateTotal() && (
                           <div className="flex items-center justify-between text-sm bg-red-100 p-2 mt-2">
                             <span className="text-red-700">Remaining:</span>
                             <span className="font-bold text-red-700">
-                              ₹{(calculateTotal() - (parseFloat(cashAmount) || 0) - (parseFloat(upiAmount) || 0)).toFixed(2)}
+                              ₹{(calculateTotal() - (parseFloat(cashAmount) || 0) - (parseFloat(cardAmount) || 0) - (parseFloat(upiAmount) || 0)).toFixed(2)}
                             </span>
                           </div>
                         )}
@@ -2090,7 +2219,7 @@ const BillingPage = () => {
                   disabled={
                     processing || 
                     (isSplitPayment 
-                      ? ((parseFloat(cashAmount) || 0) + (parseFloat(upiAmount) || 0)) < calculateTotal()
+                      ? ((parseFloat(cashAmount) || 0) + (parseFloat(cardAmount) || 0) + (parseFloat(upiAmount) || 0)) < calculateTotal()
                       : (!amountReceived || parseFloat(amountReceived) < calculateTotal())
                     )
                   }
@@ -2223,7 +2352,11 @@ const BillingPage = () => {
           subtotal: calculateSubtotal(),
           discountAmount: savedDiscount,
           totalAmount: calculateTotal(),
-          totalQty: billItems.reduce((sum, item) => sum + item.quantity, 0)
+          totalQty: billItems.reduce((sum, item) => sum + item.quantity, 0),
+          paymentMethod: savedPaymentMethod,
+          splitPayment: savedSplitPayment,
+          amountReceived: savedAmountReceived,
+          change: savedChange
         }}
       />
     </div>

@@ -16,7 +16,11 @@ const ThermalBill = React.forwardRef(({ billData }, ref) => {
     subtotal = 0,
     discountAmount = 0,
     totalAmount = 0,
-    totalQty = 0
+    totalQty = 0,
+    paymentMethod = null,
+    splitPayment = null,
+    amountReceived = 0,
+    change = 0
   } = billData;
 
   // Restaurant details from env
@@ -88,6 +92,46 @@ const ThermalBill = React.forwardRef(({ billData }, ref) => {
           <span>GRAND TOTAL:</span>
           <span>₹{totalAmount.toFixed(2)}</span>
         </div>
+        
+        {/* Payment Details */}
+        {paymentMethod && (
+          <div className="mt-2 pt-2 border-t border-dashed border-black">
+            {paymentMethod === 'split' && splitPayment ? (
+              <>
+                <p className="text-[9px] font-bold mb-1">PAYMENT (SPLIT):</p>
+                {splitPayment.cash > 0 && (
+                  <div className="flex justify-between text-[9px]">
+                    <span>Cash:</span>
+                    <span>₹{splitPayment.cash.toFixed(2)}</span>
+                  </div>
+                )}
+                {splitPayment.card > 0 && (
+                  <div className="flex justify-between text-[9px]">
+                    <span>Card:</span>
+                    <span>₹{splitPayment.card.toFixed(2)}</span>
+                  </div>
+                )}
+                {splitPayment.upi > 0 && (
+                  <div className="flex justify-between text-[9px]">
+                    <span>UPI:</span>
+                    <span>₹{splitPayment.upi.toFixed(2)}</span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex justify-between text-[9px]">
+                <span>PAYMENT ({paymentMethod.toUpperCase()}):</span>
+                <span>₹{amountReceived.toFixed(2)}</span>
+              </div>
+            )}
+            {change > 0 && (
+              <div className="flex justify-between text-[9px] font-bold">
+                <span>Change:</span>
+                <span>₹{change.toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="text-center mt-3 pt-2 border-t border-double border-black text-[10px]">

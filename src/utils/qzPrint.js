@@ -19,8 +19,13 @@ let bluetoothCharacteristic = null;
 // qz.printers.find().then(p => console.log('Available Printers:', p));
 // Then set the exact printer names below:
 
-const BILL_PRINTER_NAME = null;  // e.g., 'EPSON TM-T82' or 'GP-80250IIN' - set null for auto-detect
-const KOT_PRINTER_NAME = "BlueTooth Printer";   // e.g., 'BlueTooth Printer' or 'Portable Printer' - set null for auto-detect
+// SET YOUR PRINTER NAMES HERE (copy exact name from console log)
+const BILL_PRINTER_NAME = null;  // e.g., 'EPSON TM-T82' - for wired thermal (bills)
+const KOT_PRINTER_NAME = null;   // e.g., 'BlueTooth Printer' - for Bluetooth (KOT)
+
+// If both should use the same printer, set them to the same name
+// const BILL_PRINTER_NAME = 'Your Printer Name';
+// const KOT_PRINTER_NAME = 'Your Printer Name';
 
 // ============================================
 
@@ -78,8 +83,16 @@ const setupSecurity = () => {
   securitySet = true;
 };
 
+// Connection lock to prevent multiple simultaneous connections
+let connectionPromise = null;
+
 // Connect to QZ Tray
 export const connectQZ = async () => {
+  // If already connecting, wait for that connection
+  if (connectionPromise) {
+    return connectionPromise;
+  }
+  
   if (!qz) {
     if (!initQZ()) {
       throw new Error('QZ Tray library not loaded. Please refresh the page.');
@@ -94,16 +107,23 @@ export const connectQZ = async () => {
     return true;
   }
   
-  try {
-    await qz.websocket.connect();
-    isConnected = true;
-    console.log('QZ Tray connected successfully');
-    return true;
-  } catch (err) {
-    isConnected = false;
-    console.error('QZ Tray connection failed:', err);
-    throw new Error('QZ Tray is not running. Please start QZ Tray application.');
-  }
+  // Create connection promise to prevent race conditions
+  connectionPromise = (async () => {
+    try {
+      await qz.websocket.connect();
+      isConnected = true;
+      console.log('QZ Tray connected successfully');
+      return true;
+    } catch (err) {
+      isConnected = false;
+      console.error('QZ Tray connection failed:', err);
+      throw new Error('QZ Tray is not running. Please start QZ Tray application.');
+    } finally {
+      connectionPromise = null;
+    }
+  })();
+  
+  return connectionPromise;
 };
 
 // Get and cache printer config for BILL printing (wired thermal)
@@ -126,7 +146,7 @@ export const getPrinter = async (printerName = null) => {
   
   // Auto-detect: Try to find a wired thermal printer
   const printers = await qz.printers.find();
-  console.log('Available printers:', printers);
+  console.log('🖨️ Available printers for BILL:', printers);
   
   // Look for common WIRED thermal printer names (exclude Bluetooth)
   const bluetoothKeywords = ['bluetooth', 'bt-', 'wireless', 'mobile', 'portable'];
@@ -140,9 +160,15 @@ export const getPrinter = async (printerName = null) => {
     return isThermal && !isBluetooth;
   });
   
-  // Use wired thermal if found, otherwise use default
-  const selectedPrinter = wiredThermalPrinter || (await qz.printers.getDefault());
-  console.log('Selected BILL printer (wired):', selectedPrinter);
+  // If no specific thermal found, just use the first printer that's not Bluetooth
+  const nonBluetoothPrinter = printers.find(p => {
+    const lower = p.toLowerCase();
+    return !bluetoothKeywords.some(kw => lower.includes(kw));
+  });
+  
+  // Use wired thermal if found, then any non-bluetooth, then default
+  const selectedPrinter = wiredThermalPrinter || nonBluetoothPrinter || (await qz.printers.getDefault());
+  console.log('✅ Selected BILL printer:', selectedPrinter);
   
   printerConfig = qz.configs.create(selectedPrinter);
   return printerConfig;
@@ -225,9 +251,13 @@ export const listAllPrinters = async () => {
 export const preConnectQZ = async () => {
   try {
     await connectQZ();
+    // List available printers for debugging
+    const printers = await qz.printers.find();
+    console.log('📋 Available Printers:', printers);
+    
     await getPrinter();
-    await getKOTPrinter();
-    console.log('QZ Tray pre-connected and printers cached');
+    // Don't pre-cache KOT printer - let it be selected when needed
+    console.log('QZ Tray pre-connected and bill printer cached');
     return true;
   } catch (err) {
     console.warn('QZ Tray pre-connect failed:', err.message);
@@ -398,8 +428,17 @@ export const generateThermalCommands = (billData) => {
 // Fast print using cached connection and config
 export const printThermalBill = async (billData, printerName = null) => {
   try {
-    // Use cached config if available, otherwise get new one
-    const config = printerConfig || await getPrinter(printerName);
+    // Force use KOT printer since it's confirmed working
+    // If KOT config exists, use it. Otherwise get KOT printer (which works)
+    let config;
+    if (kotPrinterConfig) {
+      config = kotPrinterConfig;
+      console.log('🧾 Using cached KOT printer for bill');
+    } else {
+      config = await getKOTPrinter(printerName);
+      console.log('🧾 Got KOT printer for bill');
+    }
+    
     const commands = generateThermalCommands(billData);
     
     const data = [{ 
@@ -408,13 +447,27 @@ export const printThermalBill = async (billData, printerName = null) => {
       data: commands
     }];
     
+    console.log('🖨️ Sending bill to printer...');
     await qz.print(config, data);
+    console.log('✅ Bill printed successfully');
     return { success: true };
   } catch (err) {
     console.error('Print error:', err);
+    
+    // Provide helpful error messages
+    if (err.message?.includes('not accepting job')) {
+      console.error('💡 Printer troubleshooting:');
+      console.error('   1. Check if printer is turned ON');
+      console.error('   2. Check if printer has paper');
+      console.error('   3. Open Windows Settings > Printers & check if printer is PAUSED');
+      console.error('   4. Try: Right-click printer > See what\'s printing > Printer menu > Resume');
+      throw new Error('Printer is off, paused, or has an error. Check printer status.');
+    }
+    
     // Reset connection on error
     isConnected = false;
     printerConfig = null;
+    kotPrinterConfig = null;
     throw err;
   }
 };

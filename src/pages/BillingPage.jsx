@@ -825,6 +825,48 @@ const BillingPage = () => {
     }
   };
 
+  // Print a paid bill directly from the bill list
+  const handlePrintPaidBill = async (bill) => {
+    const getBillTypeLabel = (type) => {
+      switch(type) {
+        case 'dine-in': return 'Dine In';
+        case 'take-away': return 'Take Away';
+        case 'swiggy': return 'Swiggy';
+        case 'zomato': return 'Zomato';
+        default: return type;
+      }
+    };
+
+    const billData = {
+      billNo: bill.billId || 'N/A',
+      orderNo: bill.billId ? bill.billId.replace('#B-', '#O-') : 'N/A',
+      kotNo: '1',
+      date: new Date(bill.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+      time: new Date(bill.paidAt || bill.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+      type: getBillTypeLabel(bill.type),
+      table: bill.tableName || 'N/A',
+      user: 'Admin',
+      items: bill.items,
+      subtotal: bill.subtotal,
+      discountAmount: bill.discount || 0,
+      totalAmount: bill.total,
+      totalQty: bill.items.reduce((sum, item) => sum + item.quantity, 0),
+      paymentMethod: bill.paymentMethod,
+      splitPayment: bill.splitPayment || null,
+      amountReceived: bill.amountReceived || bill.total,
+      change: bill.change || 0
+    };
+
+    try {
+      console.log('Printing paid bill:', billData);
+      await printThermalBill(billData);
+      toast.success('Bill printed!', { duration: 1500 });
+    } catch (err) {
+      console.error('QZ Tray error:', err.message);
+      toast.error(`Print Error: ${err.message}`, { duration: 3000 });
+    }
+  };
+
   // Check if bill has unsaved changes
   const hasUnsavedChanges = () => {
     const itemsWithChanges = billItems.filter(item => {
@@ -837,18 +879,20 @@ const BillingPage = () => {
 
   // Save and Print Bill (wired thermal printer)
   const handleSaveAndPrint = async () => {
-    // Validate first
-    if ((billType === 'dine-in') && !selectedTable) {
+    // Validate table for dine-in (only if no existing bill)
+    if ((billType === 'dine-in') && !selectedTable && !currentBillId) {
       toast.error('Please select a table');
       return;
     }
-    if (billItems.length === 0) {
+    
+    // If no items and no existing bill, can't print
+    if (billItems.length === 0 && !currentBillId) {
       toast.error('Please add items to the bill');
       return;
     }
 
-    // If there are unsaved changes, save first
-    if (hasUnsavedChanges()) {
+    // If there are unsaved changes, save first then print
+    if (hasUnsavedChanges() && billItems.length > 0) {
       const saved = await handleSaveBill();
       if (!saved) return;
       // Wait a moment for bill to be saved, then print
@@ -856,7 +900,7 @@ const BillingPage = () => {
         await handlePrintBill();
       }, 500);
     } else {
-      // No changes, just print directly
+      // No changes or no items, just print directly (existing bill)
       await handlePrintBill();
     }
   };
@@ -1840,9 +1884,23 @@ const BillingPage = () => {
                     <div className="px-4 py-2 bg-white border-t border-gray-200">
                       <div className="flex items-center justify-between text-xs text-gray-500">
                         <span>{new Date(bill.createdAt).toLocaleString('en-IN')}</span>
-                        {bill.status === 'paid' && bill.paidAt && (
-                          <span className="text-green-600 font-medium">Paid: {new Date(bill.paidAt).toLocaleTimeString('en-IN')}</span>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {bill.status === 'paid' && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePrintPaidBill(bill);
+                              }}
+                              className="flex items-center gap-1 px-2 py-1 bg-[#ec2b25] text-white hover:bg-[#d12520] transition-colors cursor-pointer"
+                            >
+                              <Printer className="w-3 h-3" />
+                              <span>Print</span>
+                            </button>
+                          )}
+                          {bill.status === 'paid' && bill.paidAt && (
+                            <span className="text-green-600 font-medium">Paid: {new Date(bill.paidAt).toLocaleTimeString('en-IN')}</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>

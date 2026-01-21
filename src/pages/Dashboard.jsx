@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../config/firebase';
-import { TrendingUp, TrendingDown, ShoppingCart, FileText, XCircle, Package, IndianRupee, Calendar, ChevronDown, Wallet } from 'lucide-react';
+import { TrendingUp, TrendingDown, ShoppingCart, FileText, XCircle, Package, IndianRupee, Calendar, ChevronDown, Wallet, CreditCard, Smartphone, Banknote } from 'lucide-react';
 
 const Dashboard = () => {
   const [stats, setStats] = useState({
@@ -17,6 +17,10 @@ const Dashboard = () => {
     topSellingItems: [],
     periodRevenue: 0,
     periodOrders: 0,
+    // Payment method breakdown
+    cashReceived: 0,
+    cardReceived: 0,
+    upiReceived: 0,
   });
   const [loading, setLoading] = useState(true);
   const [dateFilter, setDateFilter] = useState('today');
@@ -148,6 +152,28 @@ const Dashboard = () => {
       
       // Filter only paid bills for revenue calculation
       const paidBills = bills.filter(bill => bill.status === 'paid');
+
+      // Calculate payment method breakdown
+      let cashReceived = 0;
+      let cardReceived = 0;
+      let upiReceived = 0;
+
+      paidBills.forEach(bill => {
+        const billTotal = parseFloat(bill.total) || 0;
+        
+        if (bill.paymentMethod === 'split' && bill.splitPayment) {
+          // Split payment - add individual amounts
+          cashReceived += parseFloat(bill.splitPayment.cash) || 0;
+          cardReceived += parseFloat(bill.splitPayment.card) || 0;
+          upiReceived += parseFloat(bill.splitPayment.upi) || 0;
+        } else if (bill.paymentMethod === 'cash') {
+          cashReceived += billTotal;
+        } else if (bill.paymentMethod === 'card') {
+          cardReceived += billTotal;
+        } else if (bill.paymentMethod === 'upi') {
+          upiReceived += billTotal;
+        }
+      });
       
       // Fetch orders
       const ordersSnap = await getDocs(collection(db, 'orders'));
@@ -220,6 +246,9 @@ const Dashboard = () => {
         topSellingItems,
         periodRevenue: totalRevenue,
         periodOrders: completedOrders.length,
+        cashReceived,
+        cardReceived,
+        upiReceived,
       });
       setLoading(false);
     } catch (error) {
@@ -410,6 +439,51 @@ const Dashboard = () => {
           </p>
           <p className={`text-xs md:text-sm font-medium mt-2 ${stats.profitLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
             {stats.profitPercentage >= 0 ? '+' : ''}{stats.profitPercentage.toFixed(2)}%
+          </p>
+        </div>
+      </div>
+
+      {/* Payment Method Breakdown */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 md:gap-6">
+        {/* Cash Received */}
+        <div className="bg-white border-2 border-green-200 p-4 md:p-6">
+          <div className="flex items-center justify-between mb-3 md:mb-4">
+            <div className="p-2 md:p-3 bg-green-100">
+              <Banknote className="w-5 md:w-6 h-5 md:h-6 text-green-600" />
+            </div>
+          </div>
+          <h3 className="text-gray-600 text-xs md:text-sm font-medium mb-1">Cash Received</h3>
+          <p className="text-xl sm:text-2xl md:text-3xl font-bold text-green-600">{formatCurrency(stats.cashReceived)}</p>
+          <p className="text-xs md:text-sm text-gray-500 mt-2">
+            {stats.totalRevenue > 0 ? ((stats.cashReceived / stats.totalRevenue) * 100).toFixed(1) : 0}% of total
+          </p>
+        </div>
+
+        {/* Card Received */}
+        <div className="bg-white border-2 border-blue-200 p-4 md:p-6">
+          <div className="flex items-center justify-between mb-3 md:mb-4">
+            <div className="p-2 md:p-3 bg-blue-100">
+              <CreditCard className="w-5 md:w-6 h-5 md:h-6 text-blue-600" />
+            </div>
+          </div>
+          <h3 className="text-gray-600 text-xs md:text-sm font-medium mb-1">Card Received</h3>
+          <p className="text-xl sm:text-2xl md:text-3xl font-bold text-blue-600">{formatCurrency(stats.cardReceived)}</p>
+          <p className="text-xs md:text-sm text-gray-500 mt-2">
+            {stats.totalRevenue > 0 ? ((stats.cardReceived / stats.totalRevenue) * 100).toFixed(1) : 0}% of total
+          </p>
+        </div>
+
+        {/* UPI Received */}
+        <div className="bg-white border-2 border-purple-200 p-4 md:p-6">
+          <div className="flex items-center justify-between mb-3 md:mb-4">
+            <div className="p-2 md:p-3 bg-purple-100">
+              <Smartphone className="w-5 md:w-6 h-5 md:h-6 text-purple-600" />
+            </div>
+          </div>
+          <h3 className="text-gray-600 text-xs md:text-sm font-medium mb-1">UPI Received</h3>
+          <p className="text-xl sm:text-2xl md:text-3xl font-bold text-purple-600">{formatCurrency(stats.upiReceived)}</p>
+          <p className="text-xs md:text-sm text-gray-500 mt-2">
+            {stats.totalRevenue > 0 ? ((stats.upiReceived / stats.totalRevenue) * 100).toFixed(1) : 0}% of total
           </p>
         </div>
       </div>

@@ -84,15 +84,42 @@ const BillingPage = () => {
   const itemsListRef = useRef();
   const addBillSectionRef = useRef();
 
-  // Fetch all data
+  // Fetch all data - OPTIMIZED: Combine fetches to reduce Firebase reads
   useEffect(() => {
-    fetchFloors();
-    fetchTables();
-    fetchCategories();
-    fetchItems();
-    fetchBills();
-    fetchTotalBillsCount();
-    fetchBillStats();
+    const fetchInitialData = async () => {
+      try {
+        // Fetch static data in parallel (floors, tables, categories, items)
+        const [floorsSnap, tablesSnap, categoriesSnap, itemsSnap] = await Promise.all([
+          getDocs(query(collection(db, 'floors'), orderBy('createdAt', 'desc'))),
+          getDocs(query(collection(db, 'tables'), orderBy('createdAt', 'desc'))),
+          getDocs(query(collection(db, 'categories'), orderBy('createdAt', 'desc'))),
+          getDocs(query(collection(db, 'items'), orderBy('createdAt', 'desc')))
+        ]);
+        
+        setFloors(floorsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        setTables(tablesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        setCategories(categoriesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        setItems(itemsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        
+        // Fetch bills with pagination
+        const billsQuery = query(collection(db, 'bills'), orderBy('createdAt', 'desc'), limit(ITEMS_PER_PAGE));
+        const billsSnap = await getDocs(billsQuery);
+        const billsData = billsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setBills(billsData);
+        setLastVisible(billsSnap.docs[billsSnap.docs.length - 1]);
+        
+        // Get total count and stats from the same data (no extra reads)
+        setTotalBills(billsData.length); // Approximate - will be updated when paginating
+        fetchBillStats(billsData); // Pass bills data to avoid re-fetching
+        
+        setLoading(false);
+      } catch (error) {
+        console.error('Error fetching initial data:', error);
+        setLoading(false);
+      }
+    };
+    
+    fetchInitialData();
     
     // Pre-connect QZ Tray for fast printing (desktop only)
     if (!isMobile()) {
@@ -104,15 +131,19 @@ const BillingPage = () => {
     }
   }, []);
 
-  // Fetch bill statistics for today
-  const fetchBillStats = async () => {
+  // Fetch bill statistics for today - OPTIMIZED: Uses bills already fetched
+  const fetchBillStats = async (billsData = null) => {
     try {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const todayISO = today.toISOString();
 
-      const querySnapshot = await getDocs(collection(db, 'bills'));
-      const allBills = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Use provided bills data or fetch only if necessary
+      let allBills = billsData;
+      if (!allBills) {
+        // Only fetch if not provided - this reduces reads
+        const querySnapshot = await getDocs(collection(db, 'bills'));
+        allBills = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      }
       
       // Filter today's bills
       const todayBills = allBills.filter(bill => {

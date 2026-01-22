@@ -145,8 +145,15 @@ const Dashboard = () => {
 
       const { startDate, endDate } = dateRange;
 
-      // Fetch bills
-      const billsSnap = await getDocs(collection(db, 'bills'));
+      // Fetch all data in parallel to reduce load time
+      const [billsSnap, ordersSnap, investmentsSnap, payrollsSnap] = await Promise.all([
+        getDocs(collection(db, 'bills')),
+        getDocs(collection(db, 'orders')),
+        getDocs(collection(db, 'investments')),
+        getDocs(collection(db, 'payrolls'))
+      ]);
+
+      // Process bills
       const allBills = billsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const bills = allBills.filter(bill => isDateInRange(bill.createdAt, startDate, endDate));
       
@@ -175,21 +182,18 @@ const Dashboard = () => {
         }
       });
       
-      // Fetch orders
-      const ordersSnap = await getDocs(collection(db, 'orders'));
+      // Process orders
       const allOrders = ordersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const orders = allOrders.filter(order => isDateInRange(order.createdAt, startDate, endDate));
       
       // Filter completed orders for revenue-related calculations
       const completedOrders = orders.filter(order => order.status === 'completed');
       
-      // Fetch investments
-      const investmentsSnap = await getDocs(collection(db, 'investments'));
+      // Process investments
       const allInvestments = investmentsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const investments = allInvestments.filter(inv => isDateInRange(inv.createdAt, startDate, endDate));
 
-      // Fetch payrolls
-      const payrollsSnap = await getDocs(collection(db, 'payrolls'));
+      // Process payrolls
       const allPayrolls = payrollsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       const payrolls = allPayrolls.filter(payroll => isDateInRange(payroll.createdAt, startDate, endDate));
 

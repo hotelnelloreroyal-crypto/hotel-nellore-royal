@@ -793,25 +793,20 @@ export const disconnectBluetoothPrinter = () => {
 
 // ============================================
 
-// Print KOT - Auto-selects QZ Tray (desktop) or Web Bluetooth (mobile)
+// Print KOT - Uses the same wired printer as bills via QZ Tray
 export const printKOT = async (kotData, printerName = null) => {
   const commands = generateKOTCommands(kotData);
   
-  // On mobile, use Web Bluetooth
-  if (isMobile() && isWebBluetoothAvailable()) {
-    console.log('Mobile detected - using Web Bluetooth for KOT');
-    try {
-      await printViaBluetooth(commands);
-      return { success: true, method: 'bluetooth' };
-    } catch (err) {
-      console.error('Web Bluetooth print error:', err);
-      throw new Error('Bluetooth print failed: ' + err.message);
-    }
-  }
-  
-  // On desktop, use QZ Tray
+  // Use the same printer as bills (kotPrinterConfig is the one that works)
   try {
-    const config = kotPrinterConfig || await getKOTPrinter(printerName);
+    let config;
+    if (kotPrinterConfig) {
+      config = kotPrinterConfig;
+      console.log('🎫 Using cached KOT printer for KOT');
+    } else {
+      config = await getKOTPrinter(printerName);
+      console.log('🎫 Got KOT printer for KOT');
+    }
     
     const data = [{ 
       type: 'raw', 
@@ -819,11 +814,26 @@ export const printKOT = async (kotData, printerName = null) => {
       data: commands
     }];
     
+    console.log('🖨️ Sending KOT to printer...');
     await qz.print(config, data);
+    console.log('✅ KOT printed successfully');
     return { success: true, method: 'qz-tray' };
   } catch (err) {
     console.error('KOT Print error:', err);
+    
+    // Provide helpful error messages
+    if (err.message?.includes('not accepting job')) {
+      console.error('💡 Printer troubleshooting:');
+      console.error('   1. Check if printer is turned ON');
+      console.error('   2. Check if printer has paper');
+      console.error('   3. Open Windows Settings > Printers & check if printer is PAUSED');
+      console.error('   4. Try: Right-click printer > See what\'s printing > Printer menu > Resume');
+      throw new Error('Printer is off, paused, or has an error. Check printer status.');
+    }
+    
+    // Reset connection on error
     isConnected = false;
+    printerConfig = null;
     kotPrinterConfig = null;
     throw err;
   }

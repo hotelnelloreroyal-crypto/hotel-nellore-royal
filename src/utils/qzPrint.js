@@ -15,17 +15,20 @@ let bluetoothCharacteristic = null;
 // ============================================
 // PRINTER CONFIGURATION - SET YOUR PRINTER NAMES HERE
 // ============================================
+// Option 1: Set via environment variables in .env file:
+//   VITE_BILL_PRINTER_NAME=Your Printer Name
+//   VITE_KOT_PRINTER_NAME=Your Printer Name
+// 
+// Option 2: Set directly below (overrides env vars):
+//   const BILL_PRINTER_NAME = 'Your Printer Name';
+// 
 // To find your printer names, run this in browser console after QZ connects:
 // qz.printers.find().then(p => console.log('Available Printers:', p));
-// Then set the exact printer names below:
+// Or call: window.listPrinters() (we add this helper below)
 
-// SET YOUR PRINTER NAMES HERE (copy exact name from console log)
-const BILL_PRINTER_NAME = null;  // e.g., 'EPSON TM-T82' - for wired thermal (bills)
-const KOT_PRINTER_NAME = null;   // e.g., 'BlueTooth Printer' - for Bluetooth (KOT)
-
-// If both should use the same printer, set them to the same name
-// const BILL_PRINTER_NAME = 'Your Printer Name';
-// const KOT_PRINTER_NAME = 'Your Printer Name';
+// SET YOUR PRINTER NAMES HERE (or use .env variables)
+const BILL_PRINTER_NAME = import.meta.env.VITE_BILL_PRINTER_NAME || null;
+const KOT_PRINTER_NAME = import.meta.env.VITE_KOT_PRINTER_NAME || null;
 
 // ============================================
 
@@ -235,9 +238,13 @@ export const listAllPrinters = async () => {
       console.log(`${i + 1}. ${p}${isDefault}`);
     });
     console.log('='.repeat(50));
-    console.log('💡 To configure printers, edit qzPrint.js and set:');
-    console.log('   BILL_PRINTER_NAME = "Your Wired Printer Name"');
-    console.log('   KOT_PRINTER_NAME = "Your Bluetooth Printer Name"');
+    console.log('💡 To configure printers, add to your .env file:');
+    console.log('   VITE_BILL_PRINTER_NAME=Your Printer Name');
+    console.log('   VITE_KOT_PRINTER_NAME=Your Printer Name');
+    console.log('='.repeat(50));
+    console.log('Current configured printers:');
+    console.log('   BILL_PRINTER_NAME:', BILL_PRINTER_NAME || '(auto-detect)');
+    console.log('   KOT_PRINTER_NAME:', KOT_PRINTER_NAME || '(auto-detect)');
     console.log('='.repeat(50));
     
     return printers;
@@ -247,6 +254,11 @@ export const listAllPrinters = async () => {
   }
 };
 
+// Make listAllPrinters available globally for debugging in browser console
+if (typeof window !== 'undefined') {
+  window.listPrinters = listAllPrinters;
+}
+
 // Pre-connect and cache printer on app load
 export const preConnectQZ = async () => {
   try {
@@ -254,6 +266,8 @@ export const preConnectQZ = async () => {
     // List available printers for debugging
     const printers = await qz.printers.find();
     console.log('📋 Available Printers:', printers);
+    console.log('💡 Configured BILL printer:', BILL_PRINTER_NAME || '(auto-detect)');
+    console.log('💡 Configured KOT printer:', KOT_PRINTER_NAME || '(auto-detect)');
     
     await getPrinter();
     // Don't pre-cache KOT printer - let it be selected when needed
@@ -264,7 +278,6 @@ export const preConnectQZ = async () => {
     return false;
   }
 };
-
 // Check if QZ is ready
 export const isQZReady = () => {
   return isConnected && printerConfig !== null;
@@ -425,29 +438,65 @@ export const generateThermalCommands = (billData) => {
   return cmd;
 };
 
+// Helper function to properly convert ESC/POS string with binary chars to base64
+const stringToBase64 = (str) => {
+  // Create an array of byte values from the string
+  const bytes = [];
+  for (let i = 0; i < str.length; i++) {
+    bytes.push(str.charCodeAt(i) & 0xFF);
+  }
+  // Convert bytes to base64
+  const binary = String.fromCharCode(...bytes);
+  return btoa(binary);
+};
+
 // Fast print using cached connection and config
 export const printThermalBill = async (billData, printerName = null) => {
   try {
-    // Force use KOT printer since it's confirmed working
-    // If KOT config exists, use it. Otherwise get KOT printer (which works)
-    let config;
-    if (kotPrinterConfig) {
-      config = kotPrinterConfig;
-      console.log('🧾 Using cached KOT printer for bill');
+    await connectQZ();
+    
+    // Get the printer name to use
+    let selectedPrinter;
+    const targetPrinter = printerName || KOT_PRINTER_NAME || BILL_PRINTER_NAME;
+    
+    if (targetPrinter) {
+      selectedPrinter = targetPrinter;
+      console.log('🧾 Using configured printer:', selectedPrinter);
     } else {
-      config = await getKOTPrinter(printerName);
-      console.log('🧾 Got KOT printer for bill');
+      // Auto-detect printer
+      const printers = await qz.printers.find();
+      console.log('📋 Available printers:', printers);
+      
+      // Try to find thermal printer
+      const thermalKeywords = ['thermal', 'pos', 'receipt', 'epson', 'star', 'bixolon', '80mm', '58mm', 'gp-', 'xp-', 'tm-', 'bluetooth', 'bt-'];
+      const thermalPrinter = printers.find(p => 
+        thermalKeywords.some(kw => p.toLowerCase().includes(kw))
+      );
+      
+      selectedPrinter = thermalPrinter || (await qz.printers.getDefault());
+      console.log('🧾 Auto-selected printer:', selectedPrinter);
     }
+    
+    // Create config for raw printing - altPrinting helps with some drivers
+    const config = qz.configs.create(selectedPrinter, {
+      altPrinting: true
+    });
     
     const commands = generateThermalCommands(billData);
     
+    // Convert ESC/POS string to base64 properly handling binary chars
+    const base64Commands = stringToBase64(commands);
+    
+    // Send as raw base64 data
     const data = [{ 
       type: 'raw', 
-      format: 'plain',
-      data: commands
+      format: 'base64',
+      data: base64Commands
     }];
     
-    console.log('🖨️ Sending bill to printer...');
+    console.log('🖨️ Sending bill to printer:', selectedPrinter);
+    console.log('📝 Commands length:', commands.length);
+    
     await qz.print(config, data);
     console.log('✅ Bill printed successfully');
     return { success: true };
@@ -475,13 +524,38 @@ export const printThermalBill = async (billData, printerName = null) => {
 // Print menu items list
 export const printMenuItems = async (items, categories, printerName = null) => {
   try {
-    const config = printerConfig || await getPrinter(printerName);
+    await connectQZ();
+    
+    // Get the printer name to use
+    let selectedPrinter;
+    const targetPrinter = printerName || BILL_PRINTER_NAME || KOT_PRINTER_NAME;
+    
+    if (targetPrinter) {
+      selectedPrinter = targetPrinter;
+    } else {
+      const printers = await qz.printers.find();
+      const thermalKeywords = ['thermal', 'pos', 'receipt', 'epson', 'star', 'bixolon', '80mm', '58mm', 'gp-', 'xp-', 'tm-', 'bluetooth', 'bt-'];
+      const thermalPrinter = printers.find(p => 
+        thermalKeywords.some(kw => p.toLowerCase().includes(kw))
+      );
+      selectedPrinter = thermalPrinter || (await qz.printers.getDefault());
+    }
+    
+    // Create config for raw printing - altPrinting helps with some drivers
+    const config = qz.configs.create(selectedPrinter, {
+      altPrinting: true
+    });
+    
     const commands = generateMenuPrintCommands(items, categories);
     
+    // Convert ESC/POS string to base64 properly handling binary chars
+    const base64Commands = stringToBase64(commands);
+    
+    // Send as raw base64 data
     const data = [{ 
       type: 'raw', 
-      format: 'plain',
-      data: commands
+      format: 'base64',
+      data: base64Commands
     }];
     
     await qz.print(config, data);
@@ -797,24 +871,49 @@ export const disconnectBluetoothPrinter = () => {
 export const printKOT = async (kotData, printerName = null) => {
   const commands = generateKOTCommands(kotData);
   
-  // Use the same printer as bills (kotPrinterConfig is the one that works)
   try {
-    let config;
-    if (kotPrinterConfig) {
-      config = kotPrinterConfig;
-      console.log('🎫 Using cached KOT printer for KOT');
+    await connectQZ();
+    
+    // Get the printer name to use
+    let selectedPrinter;
+    const targetPrinter = printerName || KOT_PRINTER_NAME || BILL_PRINTER_NAME;
+    
+    if (targetPrinter) {
+      selectedPrinter = targetPrinter;
+      console.log('🎫 Using configured printer:', selectedPrinter);
     } else {
-      config = await getKOTPrinter(printerName);
-      console.log('🎫 Got KOT printer for KOT');
+      // Auto-detect printer
+      const printers = await qz.printers.find();
+      console.log('📋 Available printers:', printers);
+      
+      // Try to find thermal/bluetooth printer
+      const thermalKeywords = ['thermal', 'pos', 'receipt', 'epson', 'star', 'bixolon', '80mm', '58mm', 'gp-', 'xp-', 'tm-', 'bluetooth', 'bt-'];
+      const thermalPrinter = printers.find(p => 
+        thermalKeywords.some(kw => p.toLowerCase().includes(kw))
+      );
+      
+      selectedPrinter = thermalPrinter || (await qz.printers.getDefault());
+      console.log('🎫 Auto-selected printer:', selectedPrinter);
     }
     
+    // Create config for raw printing - altPrinting helps with some drivers
+    const config = qz.configs.create(selectedPrinter, {
+      altPrinting: true
+    });
+    
+    // Convert ESC/POS string to base64 properly handling binary chars
+    const base64Commands = stringToBase64(commands);
+    
+    // Send as raw base64 data
     const data = [{ 
       type: 'raw', 
-      format: 'plain',
-      data: commands
+      format: 'base64',
+      data: base64Commands
     }];
     
-    console.log('🖨️ Sending KOT to printer...');
+    console.log('🖨️ Sending KOT to printer:', selectedPrinter);
+    console.log('📝 Commands length:', commands.length);
+    
     await qz.print(config, data);
     console.log('✅ KOT printed successfully');
     return { success: true, method: 'qz-tray' };

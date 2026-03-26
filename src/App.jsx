@@ -17,6 +17,7 @@ import Orders from './pages/Orders';
 import Investment from './pages/Investment';
 import Payroll from './pages/Payroll';
 import Staff from './pages/Staff';
+import Reports from './pages/Reports';
 
 const AppLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -134,6 +135,14 @@ const App = () => {
                         element={
                           <ProtectedRoute menuValue="staff">
                             <Staff />
+                          </ProtectedRoute>
+                        } 
+                      />
+                      <Route 
+                        path="/reports" 
+                        element={
+                          <ProtectedRoute menuValue="reports">
+                            <Reports />
                           </ProtectedRoute>
                         } 
                       />

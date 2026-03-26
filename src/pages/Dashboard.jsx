@@ -228,8 +228,8 @@ const Dashboard = () => {
               revenue: 0
             };
           }
-          itemSales[order.itemName].quantity += 1;
-          itemSales[order.itemName].revenue += parseFloat(order.subtotal) || parseFloat(order.price) || 0;
+          itemSales[order.itemName].quantity += (Number(order.quantity) || 1);
+          itemSales[order.itemName].revenue += parseFloat(order.subtotal) || (parseFloat(order.price) * (Number(order.quantity) || 1)) || 0;
         }
       });
 

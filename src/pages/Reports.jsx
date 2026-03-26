@@ -1,13 +1,47 @@
-import React, { useState } from 'react';
-import { useRestaurant } from '../context/RestaurantContext';
+import React, { useState, useEffect } from 'react';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../config/firebase';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
-import { Calendar, Download, TrendingUp, DollarSign, ShoppingBag, ChevronDown, ChevronRight, Package, List } from 'lucide-react';
+import { Calendar, Download, TrendingUp, DollarSign, ShoppingBag, ChevronDown, ChevronRight, Package, List, Loader2 } from 'lucide-react';
 
 const Reports = () => {
-  const { orders, categories, menuItems, getTopSellingItems } = useRestaurant();
   const [dateRange, setDateRange] = useState('today');
   const [expandedCategories, setExpandedCategories] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [bills, setBills] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [menuItems, setMenuItems] = useState([]);
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  // Fetch data from Firestore whenever dateRange changes IF you want real-time, 
+  // but for now we fetch once and filter locally to reduce reads.
+  // Unless we want to be very precise with Firestore queries.
+  useEffect(() => {
+    fetchData();
+  }, [dateRange]);
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const [billsSnap, categoriesSnap, itemsSnap] = await Promise.all([
+        getDocs(collection(db, 'bills')),
+        getDocs(collection(db, 'categories')),
+        getDocs(collection(db, 'items'))
+      ]);
+
+      setBills(billsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setCategories(categoriesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setMenuItems(itemsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching reports data:', error);
+      setLoading(false);
+    }
+  };
 
   const toggleCategory = (categoryId) => {
     setExpandedCategories(prev => ({
@@ -16,45 +50,63 @@ const Reports = () => {
     }));
   };
 
-  const filterOrdersByDate = () => {
+  const getDateRangeBounds = () => {
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
+    let startDate, endDate;
+
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(todayStart);
+    todayEnd.setHours(23, 59, 59, 999);
+
+    switch (dateRange) {
+      case 'today':
+        startDate = todayStart;
+        endDate = todayEnd;
+        break;
+      case 'yesterday':
+        startDate = new Date(todayStart);
+        startDate.setDate(startDate.getDate() - 1);
+        endDate = new Date(startDate);
+        endDate.setHours(23, 59, 59, 999);
+        break;
+      case 'week':
+        startDate = new Date(todayStart);
+        startDate.setDate(startDate.getDate() - 7);
+        endDate = todayEnd;
+        break;
+      case 'month':
+        startDate = new Date(todayStart);
+        startDate.setMonth(startDate.getMonth() - 1);
+        endDate = todayEnd;
+        break;
+      default:
+        startDate = new Date(0); // All time
+        endDate = todayEnd;
+    }
+    return { startDate, endDate };
+  };
+
+  const filterBillsByDate = () => {
+    if (dateRange === 'all') return bills;
+    const { startDate, endDate } = getDateRangeBounds();
     
-    return orders.filter(order => {
-      const orderDate = new Date(order.timestamp);
-      
-      switch (dateRange) {
-        case 'today':
-          return orderDate >= today;
-        case 'yesterday':
-          return orderDate >= yesterday && orderDate < today;
-        case 'week':
-          const weekAgo = new Date(today);
-          weekAgo.setDate(weekAgo.getDate() - 7);
-          return orderDate >= weekAgo;
-        case 'month':
-          const monthAgo = new Date(today);
-          monthAgo.setMonth(monthAgo.getMonth() - 1);
-          return orderDate >= monthAgo;
-        default:
-          return true;
-      }
+    return bills.filter(bill => {
+      const billDate = new Date(bill.createdAt || bill.paidAt || 0);
+      return billDate >= startDate && billDate <= endDate;
     });
   };
 
-  const filteredOrders = filterOrdersByDate();
-  const completedOrders = filteredOrders.filter(order => order.status === 'completed');
+  const filteredBills = filterBillsByDate();
+  const paidBills = filteredBills.filter(bill => bill.status === 'paid');
 
   const stats = {
-    totalRevenue: completedOrders.reduce((sum, order) => sum + order.total, 0),
-    totalOrders: completedOrders.length,
-    avgOrderValue: completedOrders.length > 0 
-      ? completedOrders.reduce((sum, order) => sum + order.total, 0) / completedOrders.length 
+    totalRevenue: paidBills.reduce((sum, bill) => sum + (parseFloat(bill.total) || 0), 0),
+    totalOrders: paidBills.length,
+    avgOrderValue: paidBills.length > 0 
+      ? paidBills.reduce((sum, bill) => sum + (parseFloat(bill.total) || 0), 0) / paidBills.length 
       : 0,
-    totalItems: completedOrders.reduce((sum, order) => 
-      sum + order.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0
+    totalItems: paidBills.reduce((sum, bill) => 
+      sum + (bill.items?.reduce((itemSum, item) => itemSum + (Number(item.quantity) || 0), 0) || 0), 0
     ),
   };
 
@@ -66,16 +118,19 @@ const Reports = () => {
       categorySales[cat.id] = {
         id: cat.id,
         name: cat.name,
-        icon: cat.icon,
+        icon: cat.emoji || cat.icon || '📁',
         items: {},
         totalQty: 0,
         totalRevenue: 0
       };
     });
 
-    completedOrders.forEach(order => {
-      order.items.forEach(item => {
-        const menuItem = menuItems.find(mi => mi.id === item.id);
+    paidBills.forEach(bill => {
+      if (!bill.items) return;
+      
+      bill.items.forEach(item => {
+        // Find menuItem to get its current category
+        const menuItem = menuItems.find(mi => String(mi.id) === String(item.id));
         const categoryId = menuItem ? menuItem.categoryId : 'unknown';
         
         if (!categorySales[categoryId]) {
@@ -95,45 +150,45 @@ const Reports = () => {
             name: item.name,
             quantity: 0,
             revenue: 0,
-            price: item.price
+            price: parseFloat(item.price) || 0
           };
         }
 
-        categorySales[categoryId].items[item.id].quantity += item.quantity;
-        categorySales[categoryId].items[item.id].revenue += item.price * item.quantity;
-        categorySales[categoryId].totalQty += item.quantity;
-        categorySales[categoryId].totalRevenue += item.price * item.quantity;
+        const qty = Number(item.quantity) || 0;
+        const price = parseFloat(item.price) || 0;
+        
+        categorySales[categoryId].items[item.id].quantity += qty;
+        categorySales[categoryId].items[item.id].revenue += price * qty;
+        categorySales[categoryId].totalQty += qty;
+        categorySales[categoryId].totalRevenue += price * qty;
       });
     });
 
-    // Remove categories with no items sold to keep the UI clean
     return Object.values(categorySales).filter(cat => cat.totalQty > 0);
   };
 
   const salesByCategory = getSalesByCategory();
 
-  const paymentMethodStats = {
-    cash: completedOrders.filter(o => o.paymentMethod === 'cash').length,
-    card: completedOrders.filter(o => o.paymentMethod === 'card').length,
-    upi: completedOrders.filter(o => o.paymentMethod === 'upi').length,
-  };
-
   const getLocalTopItems = (limit = 10) => {
     const itemSales = {};
     
-    completedOrders.forEach(order => {
-      order.items.forEach(item => {
+    paidBills.forEach(bill => {
+      if (!bill.items) return;
+      bill.items.forEach(item => {
         if (!itemSales[item.id]) {
           itemSales[item.id] = { 
             id: item.id, 
             name: item.name, 
             totalQuantity: 0, 
             totalRevenue: 0,
-            price: item.price
+            price: parseFloat(item.price) || 0
           };
         }
-        itemSales[item.id].totalQuantity += item.quantity;
-        itemSales[item.id].totalRevenue += item.price * item.quantity;
+        const qty = Number(item.quantity) || 0;
+        const price = parseFloat(item.price) || 0;
+        
+        itemSales[item.id].totalQuantity += qty;
+        itemSales[item.id].totalRevenue += price * qty;
       });
     });
 
@@ -159,13 +214,29 @@ const Reports = () => {
     return labels[dateRange] || 'All Time';
   };
 
+  const paymentMethodStats = {
+    cash: paidBills.filter(o => o.paymentMethod === 'cash').length,
+    card: paidBills.filter(o => o.paymentMethod === 'card').length,
+    upi: paidBills.filter(o => o.paymentMethod === 'upi').length,
+    split: paidBills.filter(o => o.paymentMethod === 'split').length,
+  };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <Loader2 className="w-12 h-12 text-orange-500 animate-spin" />
+        <p className="text-gray-500 font-bold animate-pulse">Generating Report...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 pb-12 bg-gray-50/50 min-h-screen p-4 md:p-8">
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
         <div>
           <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">Reports & Insights</h1>
-          <p className="text-gray-500 mt-2 text-lg flex items-center gap-2">
+          <p className="text-gray-500 mt-2 text-lg flex items-center gap-2 font-bold">
             <TrendingUp size={20} className="text-orange-500" />
             Analyzing performance for <span className="font-semibold text-orange-600 underline decoration-2 decoration-orange-200 underline-offset-4">{getDateRangeLabel()}</span>
           </p>
@@ -186,8 +257,8 @@ const Reports = () => {
             </select>
             <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={18} />
           </div>
-          <Button variant="outline" className="rounded-xl px-6 py-3 border-gray-200 hover:border-orange-500 hover:text-orange-600 transition-all font-bold" icon={<Download size={20} />}>
-            Export PDF
+          <Button variant="outline" onClick={fetchData} className="rounded-xl px-6 py-3 border-gray-200 hover:border-orange-500 hover:text-orange-600 transition-all font-bold" icon={<Download size={20} />}>
+            Refresh
           </Button>
         </div>
       </div>
@@ -196,9 +267,9 @@ const Reports = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
         {[
           { label: 'Total Revenue', value: formatCurrency(stats.totalRevenue), icon: DollarSign, color: 'from-emerald-500 to-teal-600', sub: `${getDateRangeLabel()} Sales` },
-          { label: 'Total Orders', value: stats.totalOrders, icon: ShoppingBag, color: 'from-blue-500 to-indigo-600', sub: 'Completed transactions' },
-          { label: 'Avg Sale', value: formatCurrency(stats.avgOrderValue), icon: TrendingUp, color: 'from-purple-500 to-violet-600', sub: 'Revenue per order' },
-          { label: 'Items Sold', value: stats.totalItems, icon: Package, color: 'from-orange-500 to-rose-600', sub: 'Total menu items' }
+          { label: 'Total Bills', value: stats.totalOrders, icon: ShoppingBag, color: 'from-blue-500 to-indigo-600', sub: 'Paid transactions' },
+          { label: 'Avg Sale', value: formatCurrency(stats.avgOrderValue), icon: TrendingUp, color: 'from-purple-500 to-violet-600', sub: 'Revenue per bill' },
+          { label: 'Items Sold', value: stats.totalItems, icon: Package, color: 'from-orange-500 to-rose-600', sub: 'Total quantity sold' }
         ].map((stat, i) => (
           <div key={i} className={`relative overflow-hidden rounded-3xl p-6 text-white shadow-xl hover:scale-[1.02] transition-transform duration-300 bg-gradient-to-br ${stat.color}`}>
             <div className="relative z-10 flex justify-between items-start">
@@ -245,14 +316,14 @@ const Reports = () => {
                     <Package className="text-gray-300" size={40} />
                   </div>
                   <p className="text-gray-400 font-bold text-xl">No sales found for this period</p>
-                  <p className="text-gray-400 mt-2">Try changing your date filter</p>
+                  <p className="text-gray-400 mt-2">Try changing your date filter or ensure bills are marked as 'paid'</p>
                 </div>
               ) : (
                 salesByCategory.map((category) => (
                   <div key={category.id} className="group rounded-3xl border border-gray-100 hover:border-orange-200 transition-all duration-300 hover:shadow-lg overflow-hidden">
                     <button
                       onClick={() => toggleCategory(category.id)}
-                      className="w-full flex items-center justify-between p-5 bg-white group-hover:bg-orange-50/20 transition-all"
+                      className="w-full flex items-center justify-between p-5 bg-white group-hover:bg-orange-50/20 transition-all font-bold"
                     >
                       <div className="flex items-center gap-5">
                         <div className="text-3xl bg-gray-50 px-4 py-3 rounded-2xl group-hover:bg-white transition-colors">
@@ -293,7 +364,7 @@ const Reports = () => {
                               {Object.values(category.items)
                                 .sort((a, b) => b.revenue - a.revenue)
                                 .map((item) => (
-                                  <tr key={item.id} className="border-b border-gray-50 last:border-0 hover:bg-orange-50/30 transition-all cursor-default">
+                                  <tr key={item.id} className="border-b border-gray-50 last:border-0 hover:bg-orange-50/30 transition-all cursor-default font-bold">
                                     <td className="py-5 px-6 font-extrabold text-gray-800">{item.name}</td>
                                     <td className="py-5 px-4 text-center text-gray-500 font-bold">{formatCurrency(item.price)}</td>
                                     <td className="py-5 px-4 text-center">
@@ -360,7 +431,8 @@ const Reports = () => {
                 {[
                   { label: 'Cash', count: paymentMethodStats.cash, color: 'emerald', icon: '💵' },
                   { label: 'Card', count: paymentMethodStats.card, color: 'blue', icon: '💳' },
-                  { label: 'UPI', count: paymentMethodStats.upi, color: 'purple', icon: '📱' }
+                  { label: 'UPI', count: paymentMethodStats.upi, color: 'purple', icon: '📱' },
+                  { label: 'Split', count: paymentMethodStats.split, color: 'orange', icon: '✂️' }
                 ].map((pay, i) => (
                   <div key={i} className="space-y-3">
                     <div className="flex items-center justify-between text-sm">
@@ -368,7 +440,7 @@ const Reports = () => {
                         <span>{pay.icon}</span>
                         {pay.label}
                       </div>
-                      <span className="font-black text-white">{pay.count} Orders</span>
+                      <span className="font-black text-white">{pay.count} Bills</span>
                     </div>
                     <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden">
                       <div

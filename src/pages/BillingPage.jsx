@@ -5,6 +5,8 @@ import { db } from '../config/firebase';
 import toast from 'react-hot-toast';
 import ThermalBill from '../components/Billing/ThermalBill';
 import { printThermalBill, printKOT, preConnectQZ, connectBluetoothPrinter, isBluetoothConnected, isMobile, isWebBluetoothAvailable } from '../utils/qzPrint';
+import { usePrinter } from '../context/PrinterContext';
+
 import { ENABLE_AGGREGATORS } from '../config/features';
 
 const ITEMS_PER_PAGE = 24;
@@ -76,9 +78,10 @@ const BillingPage = () => {
   const [savedSplitPayment, setSavedSplitPayment] = useState(null);
   const [savedAmountReceived, setSavedAmountReceived] = useState(0);
   const [savedChange, setSavedChange] = useState(0);
-  // Bluetooth Printer State (for mobile)
-  const [bluetoothConnected, setBluetoothConnected] = useState(false);
-  const [connectingBluetooth, setConnectingBluetooth] = useState(false);
+  
+  // Printer context
+  const { bluetoothConnected, connecting: connectingBluetooth, connect: handleConnectPrinter } = usePrinter();
+
 
   const printRef = useRef();
   const itemsListRef = useRef();
@@ -990,8 +993,9 @@ const BillingPage = () => {
       toast.success('KOT sent to kitchen!', { duration: 1500 });
       // Update Bluetooth connection status after successful print
       if (isMobile() && isWebBluetoothAvailable()) {
-        setBluetoothConnected(isBluetoothConnected());
+        // Status is managed by context now
       }
+
     } catch (err) {
       console.error('KOT print error:', err.message);
       toast.error(`KOT Error: ${err.message}`, { duration: 3000 });
@@ -1000,24 +1004,9 @@ const BillingPage = () => {
 
   // Connect Bluetooth Printer (for mobile)
   const handleConnectBluetooth = async () => {
-    if (!isWebBluetoothAvailable()) {
-      toast.error('Bluetooth not supported. Use Chrome on Android.');
-      return;
-    }
-    
-    setConnectingBluetooth(true);
-    try {
-      await connectBluetoothPrinter();
-      setBluetoothConnected(true);
-      toast.success('Bluetooth printer connected!');
-    } catch (err) {
-      console.error('Bluetooth connection error:', err);
-      toast.error(`Connection failed: ${err.message}`);
-      setBluetoothConnected(false);
-    } finally {
-      setConnectingBluetooth(false);
-    }
+    await handleConnectPrinter();
   };
+
 
   // Handle payment
   const handlePayment = () => {

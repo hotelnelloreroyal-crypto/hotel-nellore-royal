@@ -18,6 +18,9 @@ import Investment from './pages/Investment';
 import Payroll from './pages/Payroll';
 import Staff from './pages/Staff';
 import Reports from './pages/Reports';
+import PrinterSetup from './pages/PrinterSetup';
+import { PrinterProvider } from './context/PrinterContext';
+
 
 const AppLayout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -46,7 +49,9 @@ const App = () => {
     <PWAProvider>
       <AuthProvider>
         <RestaurantProvider>
-          <Router>
+          <PrinterProvider>
+            <Router>
+
             <Toaster
             position="top-right"
             toastOptions={{
@@ -150,10 +155,19 @@ const App = () => {
                         path="/settings" 
                         element={
                           <ProtectedRoute menuValue="settings">
-                            <div>Settings Page - Coming Soon</div>
+                            <PrinterSetup />
                           </ProtectedRoute>
                         } 
                       />
+                      <Route 
+                        path="/printer-setup" 
+                        element={
+                          <ProtectedRoute menuValue="settings">
+                            <PrinterSetup />
+                          </ProtectedRoute>
+                        } 
+                      />
+
                     </Routes>
                   </AppLayout>
                 </ProtectedRoute>
@@ -161,10 +175,11 @@ const App = () => {
             />
           </Routes>
           <UpdatePrompt />
-        </Router>
-      </RestaurantProvider>
-    </AuthProvider>
-  </PWAProvider>
+            </Router>
+          </PrinterProvider>
+        </RestaurantProvider>
+      </AuthProvider>
+    </PWAProvider>
   );
 };
 

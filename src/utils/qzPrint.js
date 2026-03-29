@@ -29,6 +29,8 @@ let bluetoothCharacteristic = null;
 // SET YOUR PRINTER NAMES HERE (or use .env variables)
 const BILL_PRINTER_NAME = import.meta.env.VITE_BILL_PRINTER_NAME || null;
 const KOT_PRINTER_NAME = import.meta.env.VITE_KOT_PRINTER_NAME || null;
+const PRINTER_WIDTH = parseInt(import.meta.env.VITE_PRINTER_WIDTH) || 32; // Default to 32 for 58mm compatibility
+
 
 // ============================================
 
@@ -326,10 +328,11 @@ export const generateThermalCommands = (billData) => {
   const PARTIAL_CUT = GS + 'V\x01';
   const LF = '\n';
   
-  const W = 48; // Paper width chars (80mm)
-  const pad = (s, l) => s.substring(0, l).padEnd(l);
-  const padL = (s, l) => s.substring(0, l).padStart(l);
+  const W = PRINTER_WIDTH; // Flexible paper width
+  const pad = (s, l) => s.substring(0, Math.max(0, l)).padEnd(l);
+  const padL = (s, l) => s.substring(0, Math.max(0, l)).padStart(l);
   const line = (c = '-') => c.repeat(W);
+
   
   // Build command string directly (faster than array)
   let cmd = INIT;
@@ -339,18 +342,19 @@ export const generateThermalCommands = (billData) => {
   cmd += restaurantName + LF;
   cmd += BOLD_OFF + LF;
   
-  // Address - split long address into multiple lines (max ~40 chars per line)
+  // Address - split long address into multiple lines (max ~W chars per line)
   if (restaurantAddress) {
     const words = restaurantAddress.split(' ');
     let currentLine = '';
     for (const word of words) {
-      if ((currentLine + ' ' + word).trim().length > 40) {
+      if ((currentLine + ' ' + word).trim().length > W) {
         cmd += currentLine.trim() + LF;
         currentLine = word;
       } else {
         currentLine = (currentLine + ' ' + word).trim();
       }
     }
+
     if (currentLine) {
       cmd += currentLine + LF;
     }
@@ -371,10 +375,11 @@ export const generateThermalCommands = (billData) => {
   
   // Bill Info
   cmd += line('=') + LF;
-  cmd += ALIGN_CENTER + BOLD_ON + DOUBLE_HEIGHT;
+  cmd += ALIGN_CENTER + BOLD_ON;
   cmd += `BILL: ${billNo}` + LF;
-  cmd += NORMAL_SIZE + `ORDER: ${orderNo} | KOT: ${kotNo}` + LF;
+  cmd += `ORDER: ${orderNo} | KOT: ${kotNo}` + LF;
   cmd += BOLD_OFF + line('=') + LF;
+
   
   // Table/User
   cmd += ALIGN_LEFT;
@@ -383,16 +388,47 @@ export const generateThermalCommands = (billData) => {
   
   // Items Header
   cmd += BOLD_ON;
-  cmd += pad('ITEM', 22) + padL('QTY', 6) + padL('RATE', 9) + padL('AMT', 9) + LF;
+  const qtyHeadWidth = 4;
+  const rateHeadWidth = 8;
+  const amtHeadWidth = 8;
+  const itemHeadWidth = W - (qtyHeadWidth + rateHeadWidth + amtHeadWidth);
+  
+  cmd += pad('ITEM', itemHeadWidth) + padL('QTY', qtyHeadWidth) + padL('RATE', rateHeadWidth) + padL('AMT', amtHeadWidth) + LF;
   cmd += BOLD_OFF + line('-') + LF;
+
   
   // Items
   items.forEach((item, i) => {
-    const name = `${i + 1}.${item.name}`.substring(0, 22);
-    cmd += pad(name, 22) + padL(item.quantity.toString(), 6) + padL(item.price.toString(), 9) + padL((item.price * item.quantity).toString(), 9) + LF;
+    const qty = (item.quantity || 0).toString();
+    const rate = Math.round(item.price || 0).toString();
+    const amt = Math.round((item.price || 0) * (item.quantity || 0)).toString();
+    const nameStr = `${i + 1}.${item.name || 'Item'}`;
+    
+    // Using the same widths as header
+    const qtyWidth = 4;
+    const rateWidth = 8;
+    const amtWidth = 8;
+    const itemWidth = Math.max(8, W - (qtyWidth + rateWidth + amtWidth));
+
+    
+    if (nameStr.length <= itemWidth) {
+      cmd += pad(nameStr, itemWidth) + padL(qty, qtyWidth) + padL(rate, rateWidth) + padL(amt, amtWidth) + LF;
+    } else {
+      // First line
+      cmd += pad(nameStr.substring(0, itemWidth), itemWidth) + padL(qty, qtyWidth) + padL(rate, rateWidth) + padL(amt, amtWidth) + LF;
+      
+      // Wrapping
+      let remaining = nameStr.substring(itemWidth);
+      while (remaining.length > 0) {
+        cmd += pad(remaining.substring(0, itemWidth), itemWidth) + LF;
+        remaining = remaining.substring(itemWidth);
+      }
+    }
   });
-  
+
+
   cmd += line('-') + LF;
+
   
   // Totals
   cmd += `Items: ${totalQty}`.padEnd(W - `Subtotal: Rs.${subtotal}`.length) + `Subtotal: Rs.${subtotal}` + LF;
@@ -402,9 +438,10 @@ export const generateThermalCommands = (billData) => {
   }
   
   cmd += line('=') + LF;
-  cmd += BOLD_ON + DOUBLE_HEIGHT + ALIGN_RIGHT;
+  cmd += BOLD_ON + ALIGN_RIGHT;
   cmd += `TOTAL: Rs.${totalAmount}` + LF;
-  cmd += NORMAL_SIZE + BOLD_OFF + LF;
+  cmd += BOLD_OFF + LF;
+
   
   // Payment Details
   if (paymentMethod) {
@@ -453,6 +490,13 @@ const stringToBase64 = (str) => {
 // Fast print using cached connection and config
 export const printThermalBill = async (billData, printerName = null) => {
   try {
+    // Check for Bluetooth connection first
+    if (isBluetoothConnected()) {
+      console.log('📱 Bluetooth printer detected, using Bluetooth for BILL...');
+      const commands = generateThermalCommands(billData);
+      return await printViaBluetooth(commands);
+    }
+
     await connectQZ();
     
     // Get the printer name to use
@@ -500,6 +544,7 @@ export const printThermalBill = async (billData, printerName = null) => {
     await qz.print(config, data);
     console.log('✅ Bill printed successfully');
     return { success: true };
+
   } catch (err) {
     console.error('Print error:', err);
     
@@ -688,38 +733,60 @@ export const generateKOTCommands = (kotData) => {
   const PARTIAL_CUT = GS + 'V\x01';
   const LF = '\n';
   
-  const W = 48; // Paper width chars (80mm)
-  const pad = (s, l) => s.substring(0, l).padEnd(l);
-  const padL = (s, l) => s.substring(0, l).padStart(l);
+  const W = PRINTER_WIDTH; // Paper width chars
+  const pad = (s, l) => s.substring(0, Math.max(0, l)).padEnd(l);
+  const padL = (s, l) => s.substring(0, Math.max(0, l)).padStart(l);
   const line = (c = '-') => c.repeat(W);
+
   
   let cmd = INIT;
   
-  // Header - KOT Title (large, bold)
-  cmd += ALIGN_CENTER + BOLD_ON + DOUBLE_SIZE;
+  // Header - KOT Title (bold, regular size)
+  cmd += ALIGN_CENTER + BOLD_ON;
   cmd += '*** KOT ***' + LF;
-  cmd += NORMAL_SIZE + BOLD_OFF;
+  cmd += BOLD_OFF;
+
   
-  // Table Name (large, prominent)
+  // Table Name (bold, regular size)
   cmd += line('=') + LF;
-  cmd += BOLD_ON + DOUBLE_SIZE;
+  cmd += BOLD_ON;
   cmd += `TABLE: ${table}` + LF;
-  cmd += NORMAL_SIZE + BOLD_OFF;
+  cmd += BOLD_OFF;
   cmd += `${type} | ${date} ${time}` + LF;
   cmd += line('=') + LF;
+
   
   // Items Header
   cmd += ALIGN_LEFT + BOLD_ON;
-  cmd += pad('ITEM', 36) + padL('QTY', 10) + LF;
+  const qtyHeadWidth = 8;
+  const itemHeadWidth = W - qtyHeadWidth;
+  cmd += pad('ITEM', itemHeadWidth) + padL('QTY', qtyHeadWidth) + LF;
   cmd += BOLD_OFF + line('-') + LF;
+
   
-  // Items - larger for kitchen visibility
-  cmd += DOUBLE_HEIGHT;
+  // Items - regular font size with line wrapping
   items.forEach((item, i) => {
-    const name = `${i + 1}. ${item.name}`.substring(0, 36);
-    cmd += pad(name, 36) + padL(`x${item.quantity}`, 10) + LF;
+    const nameStr = `${i + 1}. ${item.name || 'Item'}`;
+    const qtyStr = `x${item.quantity || 0}`;
+    const qtyWidth = 8;
+    const nameWidth = Math.max(8, W - qtyWidth);
+    
+    if (nameStr.length <= nameWidth) {
+      cmd += pad(nameStr, nameWidth) + padL(qtyStr, qtyWidth) + LF;
+    } else {
+      // First line
+      cmd += pad(nameStr.substring(0, nameWidth), nameWidth) + padL(qtyStr, qtyWidth) + LF;
+      // Remaining lines
+      let remaining = nameStr.substring(nameWidth);
+      while (remaining.length > 0) {
+        cmd += pad(remaining.substring(0, nameWidth), nameWidth) + LF;
+        remaining = remaining.substring(nameWidth);
+      }
+    }
   });
-  cmd += NORMAL_SIZE;
+
+
+
   
   cmd += line('-') + LF;
   
@@ -846,11 +913,17 @@ export const printViaBluetooth = async (commands) => {
       }
     } catch (err) {
       console.error('Bluetooth write error at chunk', i, err);
+      // If write fails, might be disconnected
+      if (err.message?.includes('disconnected')) {
+        bluetoothDevice = null;
+        bluetoothCharacteristic = null;
+      }
       throw err;
     }
-    // Small delay between chunks
-    await new Promise(resolve => setTimeout(resolve, 50));
+    // Small delay between chunks for better reliability
+    await new Promise(resolve => setTimeout(resolve, 20));
   }
+
 
   console.log('Print data sent via Bluetooth');
   return { success: true };
@@ -871,7 +944,16 @@ export const disconnectBluetoothPrinter = () => {
 export const printKOT = async (kotData, printerName = null) => {
   const commands = generateKOTCommands(kotData);
   
+  // Check for Bluetooth connection first
+  if (isBluetoothConnected()) {
+    console.log('📱 Bluetooth printer detected, using Bluetooth for KOT...');
+    const commands = generateKOTCommands(kotData);
+    const result = await printViaBluetooth(commands);
+    return { ...result, method: 'bluetooth' };
+  }
+
   try {
+    const commands = generateKOTCommands(kotData);
     await connectQZ();
     
     // Get the printer name to use
@@ -917,6 +999,7 @@ export const printKOT = async (kotData, printerName = null) => {
     await qz.print(config, data);
     console.log('✅ KOT printed successfully');
     return { success: true, method: 'qz-tray' };
+
   } catch (err) {
     console.error('KOT Print error:', err);
     

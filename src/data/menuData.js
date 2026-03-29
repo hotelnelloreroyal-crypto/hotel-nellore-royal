@@ -7,7 +7,8 @@ export const MENU_ITEMS = [
   { label: 'Investment', value: 'investment', path: '/investment', icon: 'Package' },
   { label: 'Payroll', value: 'payroll', path: '/payroll', icon: 'Wallet' },
   { label: 'Staff', value: 'staff', path: '/staff', icon: 'Users' },
-  { label: 'Reports', value: 'reports', path: '/reports', icon: 'BarChart3' }
+  { label: 'Reports', value: 'reports', path: '/reports', icon: 'BarChart3' },
+  { label: 'Printer Setup', value: 'settings', path: '/printer-setup', icon: 'Settings' }
 ];
 
 // Restaurant details from environment variables
